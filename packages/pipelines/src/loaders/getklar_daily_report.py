@@ -45,12 +45,29 @@ log = structlog.get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def _parse_roas(value: str) -> float:
+    """Parse German-formatted ROAS like '1,22x' → 1.22."""
+    cleaned = value.strip().rstrip("x").replace(",", ".").replace("\xa0", "")
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
 @dataclass
 class ChannelTarget:
-    """Target allocation for a single channel from the template sheet."""
+    """Target allocation and attribution benchmarks for a single channel."""
 
     channel: str
-    target_pct: float  # e.g. 28.7 for 28.7%
+    target_pct: float       # e.g. 28.7 for 28.7%
+    target_spend: float     # absolute spend in €
+    net_rev_mm: float       # Net Revenue (Marketing Mix) in €
+    roas_mm: float          # ROAS (Marketing Mix)
+    nc_orders: float        # New Customer orders
+    nc_rev: float           # New Customer revenue in €
+    nc_roas: float          # New Customer ROAS
+    cac: float              # Customer Acquisition Cost in €
+    bewertung: str          # Assessment text
 
 
 def _gsheet_csv_url(sheet_url: str) -> str:
@@ -88,12 +105,21 @@ def _parse_euro(value: str) -> float:
         return 0.0
 
 
-def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
-    """Download the Google Sheet template and extract target % per channel.
+def _find_col(headers: list[str], *candidates: str) -> int:
+    """Find column index matching any candidate substring (case-insensitive)."""
+    for i, h in enumerate(headers):
+        for c in candidates:
+            if c in h:
+                return i
+    return -1
 
-    The sheet is expected to have a table with columns:
-        Channel | Spend (€) | % Spend | ...
-    Rows ending in 'TOTAL' or blank are skipped.
+
+def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
+    """Download the Google Sheet template and extract all columns per channel.
+
+    Expected columns:
+        Channel | Spend (€) | % Spend | Net Rev MM (€) | ROAS MM |
+        NC Orders | NC Rev (€) | NC ROAS | CAC (€) | Bewertung
 
     Args:
         template_url: Google Sheets URL (any variant — /edit, /view, export).
@@ -108,44 +134,54 @@ def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
     reader = csv.reader(io.StringIO(resp.text))
     targets: list[ChannelTarget] = []
     header_found = False
-
-    channel_col: int = -1
-    pct_col: int = -1
+    cols: dict[str, int] = {}
 
     for row in reader:
-        # Find the header row that contains "Channel" and "% Spend"
         if not header_found:
             lower = [c.lower().strip() for c in row]
             if "channel" in lower:
-                channel_col = lower.index("channel")
-                # Precise search for "% spend"
-                for i, h in enumerate(lower):
-                    if "%" in h:
-                        pct_col = i
-                        break
-                if pct_col == -1 and len(row) > channel_col + 1:
-                    pct_col = channel_col + 2  # fallback: 3rd column
+                cols["channel"] = lower.index("channel")
+                cols["spend"] = _find_col(lower, "spend (€)", "spend(€)")
+                cols["pct"] = _find_col(lower, "% spend")
+                cols["net_rev"] = _find_col(lower, "net rev")
+                cols["roas_mm"] = _find_col(lower, "roas mm")
+                cols["nc_orders"] = _find_col(lower, "nc orders")
+                cols["nc_rev"] = _find_col(lower, "nc rev")
+                cols["nc_roas"] = _find_col(lower, "nc roas")
+                cols["cac"] = _find_col(lower, "cac")
+                cols["bewertung"] = _find_col(lower, "bewertung")
                 header_found = True
             continue
 
         if not row or not any(c.strip() for c in row):
             continue
 
-        if channel_col >= len(row):
+        ch_col = cols.get("channel", -1)
+        if ch_col < 0 or ch_col >= len(row):
             continue
 
-        channel = row[channel_col].strip()
+        channel = row[ch_col].strip()
         if not channel:
             continue
-
-        # Stop at the TOTAL row — everything below is summary/KPI data.
         if channel.upper().startswith("TOTAL"):
             break
 
-        pct_raw = row[pct_col].strip() if pct_col < len(row) else ""
-        pct = _parse_percent(pct_raw)
+        def _cell(key: str) -> str:
+            idx = cols.get(key, -1)
+            return row[idx].strip() if 0 <= idx < len(row) else ""
 
-        targets.append(ChannelTarget(channel=channel, target_pct=pct))
+        targets.append(ChannelTarget(
+            channel=channel,
+            target_pct=_parse_percent(_cell("pct")),
+            target_spend=_parse_euro(_cell("spend")),
+            net_rev_mm=_parse_euro(_cell("net_rev")),
+            roas_mm=_parse_roas(_cell("roas_mm")),
+            nc_orders=_parse_euro(_cell("nc_orders")),  # reuse euro parser for numbers with dots
+            nc_rev=_parse_euro(_cell("nc_rev")),
+            nc_roas=_parse_roas(_cell("nc_roas")),
+            cac=_parse_euro(_cell("cac")),
+            bewertung=_cell("bewertung"),
+        ))
 
     log.info("template.loaded", channels=len(targets))
     return targets
@@ -159,21 +195,26 @@ def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
 @dataclass
 class ReportRow:
     channel: str
+    # Spend comparison
     actual_spend: float
     actual_pct: float
     target_pct: float
-    delta_pct: float  # actual_pct - target_pct
+    delta_pct: float
+    # Attribution comparison (Ist from GetKlar vs Soll from Excel)
+    actual_revenue: float
+    actual_roas: float
+    target_roas: float
+    actual_orders: float
+    target_nc_orders: float
+    target_nc_rev: float
+    target_nc_roas: float
+    target_cac: float
+    actual_cac: float
+    bewertung: str
 
 
 def _normalise_channel(name: str) -> str:
-    """Normalise a channel name for fuzzy matching.
-
-    Strips noise words that differ between the template and the API:
-    - Removes "Google " prefix ("Google Demand Gen" → "demand gen")
-    - Removes " Paid" suffix ("Bing Generic Paid Search" → "bing generic search")
-    - Removes "(Tool Cost)" suffix ("Email (Tool Cost)" → "email")
-    - Lowercases and strips whitespace
-    """
+    """Normalise a channel name for fuzzy matching."""
     n = name.lower().strip()
     n = n.removeprefix("google ")
     n = n.replace(" paid search", " search")
@@ -181,36 +222,38 @@ def _normalise_channel(name: str) -> str:
     return n.strip()
 
 
+def _find_channel_spend(
+    spend_data: list[ChannelSpend], channel_name: str
+) -> ChannelSpend | None:
+    """Find a ChannelSpend by exact or normalised name match."""
+    exact_key = channel_name.lower().strip()
+    norm_key = _normalise_channel(channel_name)
+    for s in spend_data:
+        if s.channel.lower().strip() == exact_key:
+            return s
+        if _normalise_channel(s.channel) == norm_key:
+            return s
+    return None
+
+
 def build_report(
     spend_data: list[ChannelSpend],
     targets: list[ChannelTarget],
 ) -> list[ReportRow]:
-    """Compare actual spend against target allocations.
-
-    Channels from the template but missing in actual data are shown with 0 spend.
-    Matching uses exact name first, then normalised fuzzy match.
-    """
+    """Compare actual spend and attribution against targets."""
     total_spend = sum(s.spend for s in spend_data)
-
-    # Build lookup: normalised channel name → spend
-    actual_by_norm: dict[str, float] = {}
-    actual_by_exact: dict[str, float] = {}
-    for s in spend_data:
-        actual_by_exact[s.channel.lower().strip()] = s.spend
-        actual_by_norm[_normalise_channel(s.channel)] = s.spend
 
     rows: list[ReportRow] = []
     for t in targets:
-        exact_key = t.channel.lower().strip()
-        norm_key = _normalise_channel(t.channel)
-
-        actual_spend = (
-            actual_by_exact.get(exact_key)
-            or actual_by_norm.get(norm_key)
-            or 0.0
-        )
+        cs = _find_channel_spend(spend_data, t.channel)
+        actual_spend = cs.spend if cs else 0.0
+        actual_revenue = cs.revenue if cs else 0.0
+        actual_orders = cs.orders if cs else 0.0
         actual_pct = (actual_spend / total_spend * 100) if total_spend > 0 else 0.0
+        actual_roas = (actual_revenue / actual_spend) if actual_spend > 0 else 0.0
+        actual_cac = (actual_spend / actual_orders) if actual_orders > 0 else 0.0
         delta = actual_pct - t.target_pct
+
         rows.append(
             ReportRow(
                 channel=t.channel,
@@ -218,6 +261,16 @@ def build_report(
                 actual_pct=actual_pct,
                 target_pct=t.target_pct,
                 delta_pct=delta,
+                actual_revenue=actual_revenue,
+                actual_roas=actual_roas,
+                target_roas=t.roas_mm,
+                actual_orders=actual_orders,
+                target_nc_orders=t.nc_orders,
+                target_nc_rev=t.net_rev_mm,
+                target_nc_roas=t.nc_roas,
+                target_cac=t.cac,
+                actual_cac=actual_cac,
+                bewertung=t.bewertung,
             )
         )
 
@@ -231,8 +284,15 @@ def build_report(
 
 def format_markdown_table(rows: list[ReportRow], report_date: date) -> str:
     """Format the Ist-vs-Soll comparison as a markdown table."""
+    total_spend = sum(r.actual_spend for r in rows)
+    total_rev = sum(r.actual_revenue for r in rows)
+    total_orders = sum(r.actual_orders for r in rows)
+    blended_roas = (total_rev / total_spend) if total_spend > 0 else 0.0
+
     lines = [
-        f"## Daily Spend Report — {report_date.isoformat()}",
+        f"## SHEKO Daily Spend Report — {report_date.strftime('%d.%m.%Y')}",
+        "",
+        "### Spend Allocation (Ist vs Soll)",
         "",
         "| Channel | Spend (€) | Ist % | Soll % | Delta |",
         "|---------|----------:|------:|-------:|------:|",
@@ -246,10 +306,29 @@ def format_markdown_table(rows: list[ReportRow], report_date: date) -> str:
             f"| {r.target_pct:.1f}% "
             f"| {delta_sign}{r.delta_pct:.1f}% |"
         )
-
-    # Summary totals
-    total_spend = sum(r.actual_spend for r in rows)
     lines.append(f"| **TOTAL** | **{total_spend:,.0f}€** | **100%** | **100%** | — |")
+
+    lines.extend([
+        "",
+        "### Marketing Mix Attribution (Ist vs Soll)",
+        "",
+        "| Channel | Revenue (€) | ROAS Ist | ROAS Soll | Orders | CAC Ist | CAC Soll |",
+        "|---------|------------:|---------:|----------:|-------:|--------:|---------:|",
+    ])
+    for r in rows:
+        lines.append(
+            f"| {r.channel} "
+            f"| {r.actual_revenue:,.0f}€ "
+            f"| {r.actual_roas:.2f}x "
+            f"| {r.target_roas:.2f}x "
+            f"| {r.actual_orders:,.0f} "
+            f"| {r.actual_cac:,.0f}€ "
+            f"| {r.target_cac:,.0f}€ |"
+        )
+    lines.append(
+        f"| **TOTAL** | **{total_rev:,.0f}€** | **{blended_roas:.2f}x** | — "
+        f"| **{total_orders:,.0f}** | — | — |"
+    )
 
     return "\n".join(lines)
 
@@ -259,26 +338,243 @@ def format_markdown_table(rows: list[ReportRow], report_date: date) -> str:
 # ---------------------------------------------------------------------------
 
 
-def send_to_teams(webhook_url: str, markdown_body: str) -> None:
-    """POST the report to a Microsoft Teams incoming webhook as an Adaptive Card."""
+TEAMS_MENTIONS = [
+    {"email": "dustin@sheko.com", "name": "Dustin"},
+    {"email": "aref@sheko.com", "name": "Aref"},
+    {"email": "dalibor@sheko.com", "name": "Dalibor"},
+]
+
+
+def _delta_color(delta: float) -> str:
+    """Return 'good' (green), 'warning' (yellow), or 'attention' (red) based on delta severity."""
+    abs_d = abs(delta)
+    if abs_d <= 2.0:
+        return "good"
+    elif abs_d <= 5.0:
+        return "warning"
+    return "attention"
+
+
+def _delta_icon(delta: float) -> str:
+    """Return an icon for delta direction."""
+    if delta > 0.5:
+        return "🔺"
+    elif delta < -0.5:
+        return "🔻"
+    return "✅"
+
+
+def _roas_color(actual: float, target: float) -> str:
+    """Color for ROAS comparison: green if at/above target, red if below."""
+    if target <= 0:
+        return "default"
+    if actual >= target:
+        return "good"
+    if actual >= target * 0.8:
+        return "warning"
+    return "attention"
+
+
+def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, Any]:
+    """Build a rich Adaptive Card with spend allocation + attribution comparison."""
+    total_spend = sum(r.actual_spend for r in rows)
+    total_rev = sum(r.actual_revenue for r in rows)
+    total_orders = sum(r.actual_orders for r in rows)
+    blended_roas = (total_rev / total_spend) if total_spend > 0 else 0.0
+
+    body: list[dict[str, Any]] = [
+        {
+            "type": "TextBlock",
+            "text": f"📊 SHEKO Daily Report — {report_date.strftime('%d.%m.%Y')}",
+            "size": "Large",
+            "weight": "Bolder",
+            "wrap": True,
+        },
+        {
+            "type": "ColumnSet",
+            "spacing": "Small",
+            "columns": [
+                {"type": "Column", "width": "stretch", "items": [
+                    {"type": "TextBlock", "text": f"💰 Spend: **{total_spend:,.0f}€**", "size": "Small", "wrap": True}
+                ]},
+                {"type": "Column", "width": "stretch", "items": [
+                    {"type": "TextBlock", "text": f"📈 Revenue: **{total_rev:,.0f}€**", "size": "Small", "wrap": True}
+                ]},
+                {"type": "Column", "width": "stretch", "items": [
+                    {"type": "TextBlock", "text": f"🎯 ROAS: **{blended_roas:.2f}x**", "size": "Small", "wrap": True}
+                ]},
+                {"type": "Column", "width": "stretch", "items": [
+                    {"type": "TextBlock", "text": f"🛒 Orders: **{total_orders:,.0f}**", "size": "Small", "wrap": True}
+                ]},
+            ],
+        },
+        # --- Section 1: Spend Allocation ---
+        {
+            "type": "TextBlock",
+            "text": "**Spend Allocation (Ist vs Soll)**",
+            "separator": True,
+            "spacing": "Medium",
+            "weight": "Bolder",
+        },
+        {"type": "ColumnSet", "spacing": "Small", "columns": [
+            {"type": "Column", "width": "stretch", "items": [
+                {"type": "TextBlock", "text": "**Channel**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Spend**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Ist %**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Soll %**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Delta**", "weight": "Bolder", "size": "Small"}
+            ]},
+        ]},
+    ]
+
+    for r in rows:
+        delta_sign = "+" if r.delta_pct >= 0 else ""
+        icon = _delta_icon(r.delta_pct)
+        color = _delta_color(r.delta_pct)
+        body.append({
+            "type": "ColumnSet", "spacing": "Small", "columns": [
+                {"type": "Column", "width": "stretch", "items": [
+                    {"type": "TextBlock", "text": r.channel, "size": "Small", "wrap": True}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.actual_spend:,.0f}€", "size": "Small"}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.actual_pct:.1f}%", "size": "Small"}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.target_pct:.1f}%", "size": "Small"}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{icon} {delta_sign}{r.delta_pct:.1f}%", "size": "Small", "color": color}
+                ]},
+            ],
+        })
+
+    # --- Section 2: Marketing Mix Attribution ---
+    body.extend([
+        {
+            "type": "TextBlock",
+            "text": "**Marketing Mix Attribution (Ist vs Soll)**",
+            "separator": True,
+            "spacing": "Medium",
+            "weight": "Bolder",
+        },
+        {"type": "ColumnSet", "spacing": "Small", "columns": [
+            {"type": "Column", "width": "stretch", "items": [
+                {"type": "TextBlock", "text": "**Channel**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Rev (€)**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**ROAS**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Soll**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**Orders**", "weight": "Bolder", "size": "Small"}
+            ]},
+            {"type": "Column", "width": "auto", "items": [
+                {"type": "TextBlock", "text": "**CAC**", "weight": "Bolder", "size": "Small"}
+            ]},
+        ]},
+    ])
+
+    for r in rows:
+        roas_c = _roas_color(r.actual_roas, r.target_roas)
+        body.append({
+            "type": "ColumnSet", "spacing": "Small", "columns": [
+                {"type": "Column", "width": "stretch", "items": [
+                    {"type": "TextBlock", "text": r.channel, "size": "Small", "wrap": True}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.actual_revenue:,.0f}€", "size": "Small"}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.actual_roas:.2f}x", "size": "Small", "color": roas_c}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.target_roas:.2f}x", "size": "Small"}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.actual_orders:,.0f}", "size": "Small"}
+                ]},
+                {"type": "Column", "width": "auto", "items": [
+                    {"type": "TextBlock", "text": f"{r.actual_cac:,.0f}€", "size": "Small"}
+                ]},
+            ],
+        })
+
+    # Highlights
+    over = sorted([r for r in rows if r.delta_pct > 2.0], key=lambda r: -r.delta_pct)
+    under = sorted([r for r in rows if r.delta_pct < -2.0], key=lambda r: r.delta_pct)
+    low_roas = [r for r in rows if r.target_roas > 0 and r.actual_roas < r.target_roas * 0.8]
+
+    highlights = []
+    for r in over[:3]:
+        highlights.append(f"🔺 **{r.channel}** Spend über Soll (+{r.delta_pct:.1f}%)")
+    for r in under[:3]:
+        highlights.append(f"🔻 **{r.channel}** Spend unter Soll ({r.delta_pct:.1f}%)")
+    for r in low_roas[:3]:
+        highlights.append(f"⚠️ **{r.channel}** ROAS {r.actual_roas:.2f}x vs Soll {r.target_roas:.2f}x")
+
+    if highlights:
+        body.append({
+            "type": "TextBlock",
+            "text": "**Auffälligkeiten:**\n" + "\n".join(f"- {h}" for h in highlights),
+            "wrap": True,
+            "separator": True,
+            "spacing": "Medium",
+        })
+
+    # Mentions
+    mention_names = ", ".join(f"<at>{m['name']}</at>" for m in TEAMS_MENTIONS)
+    body.append({
+        "type": "TextBlock",
+        "text": f"cc {mention_names}",
+        "spacing": "Medium",
+        "size": "Small",
+        "isSubtle": True,
+        "wrap": True,
+    })
+
+    mentions = [
+        {
+            "type": "mention",
+            "text": f"<at>{m['name']}</at>",
+            "mentioned": {"id": m["email"], "name": m["name"]},
+        }
+        for m in TEAMS_MENTIONS
+    ]
+
+    return {
+        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+        "type": "AdaptiveCard",
+        "version": "1.4",
+        "body": body,
+        "msteams": {"entities": mentions},
+    }
+
+
+def send_to_teams(webhook_url: str, rows: list[ReportRow], report_date: date) -> None:
+    """POST the report to a Microsoft Teams incoming webhook as a rich Adaptive Card."""
+    card = _build_adaptive_card(rows, report_date)
     payload: dict[str, Any] = {
         "type": "message",
         "attachments": [
             {
                 "contentType": "application/vnd.microsoft.card.adaptive",
-                "content": {
-                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                    "type": "AdaptiveCard",
-                    "version": "1.4",
-                    "body": [
-                        {
-                            "type": "TextBlock",
-                            "text": markdown_body,
-                            "wrap": True,
-                            "fontType": "Monospace",
-                        }
-                    ],
-                },
+                "content": card,
             }
         ],
     }
@@ -322,7 +618,7 @@ def run_pipeline(report_date: date) -> str:
     # 5. Deliver
     if teams_webhook:
         log.info("pipeline.step", step="send_teams")
-        send_to_teams(teams_webhook, report_md)
+        send_to_teams(teams_webhook, rows, report_date)
     else:
         log.info(
             "pipeline.step",
