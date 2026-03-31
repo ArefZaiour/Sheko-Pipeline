@@ -59,7 +59,7 @@ class GetKlarClient:
             raise EnvironmentError(
                 "GETKLAR_API_TOKEN is required for the GetKlar Attribution API."
             )
-        self._api_token = api_token
+        self._api_token = api_token.strip()
         self._timeout = timeout
         self._access_token: str | None = None
         self._access_token_expiry: float = 0.0
