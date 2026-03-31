@@ -1,0 +1,29 @@
+name: GetKlar Daily Report
+
+on:
+  schedule:
+    # 6:57 UTC ≈ 8:57 CET / 8:57 CEST → ~9:00 AM German time
+    - cron: "57 6 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -e packages/pipelines
+
+      - name: Run GetKlar daily report
+        env:
+          GETKLAR_API_TOKEN: ${{ secrets.GETKLAR_API_TOKEN }}
+          GETKLAR_TEMPLATE_URL: ${{ secrets.GETKLAR_TEMPLATE_URL }}
+          TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
+        run: |
+          cd packages/pipelines
+          python -m src.loaders.getklar_daily_report
