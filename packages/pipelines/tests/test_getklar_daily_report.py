@@ -19,6 +19,7 @@ from loaders.getklar_daily_report import (
     ChannelTarget,
     ReportRow,
     _gsheet_csv_url,
+    _normalise_channel,
     _parse_euro,
     _parse_percent,
     build_report,
@@ -67,6 +68,28 @@ def test_gsheet_csv_url_extracts_id() -> None:
 def test_gsheet_csv_url_raises_on_invalid() -> None:
     with pytest.raises(ValueError, match="Cannot extract"):
         _gsheet_csv_url("https://example.com/not-a-sheet")
+
+
+# ---------------------------------------------------------------------------
+# Channel normalisation
+# ---------------------------------------------------------------------------
+
+
+def test_normalise_channel_strips_google_prefix() -> None:
+    assert _normalise_channel("Google Demand Gen") == "demand gen"
+
+
+def test_normalise_channel_strips_paid_suffix() -> None:
+    assert _normalise_channel("Bing Generic Paid Search") == "bing generic search"
+    assert _normalise_channel("Bing Branded Paid Search") == "bing branded search"
+
+
+def test_normalise_channel_strips_tool_cost() -> None:
+    assert _normalise_channel("Email (Tool Cost)") == "email"
+
+
+def test_normalise_channel_no_change_for_simple() -> None:
+    assert _normalise_channel("Meta Ads") == "meta ads"
 
 
 # ---------------------------------------------------------------------------
@@ -121,20 +144,20 @@ def test_load_targets_excludes_total(monkeypatch: pytest.MonkeyPatch) -> None:
 
 _TARGETS = [
     ChannelTarget(channel="Meta Ads", target_pct=28.7),
-    ChannelTarget(channel="Google Generic Search", target_pct=14.6),
-    ChannelTarget(channel="Criteo", target_pct=13.5),
+    ChannelTarget(channel="Demand Gen", target_pct=10.2),
+    ChannelTarget(channel="Bing Generic Search", target_pct=2.2),
+    ChannelTarget(channel="Email (Tool Cost)", target_pct=0.1),
 ]
 
 
 def test_build_report_calculates_actual_pct() -> None:
     spend_data = [
-        ChannelSpend(channel="Meta Ads", spend=300.0, conversions=100, revenue=400.0),
-        ChannelSpend(channel="Google Generic Search", spend=100.0, conversions=50, revenue=150.0),
-        ChannelSpend(channel="Criteo", spend=100.0, conversions=10, revenue=50.0),
+        ChannelSpend(channel="Meta Ads", spend=300.0, orders=100, revenue=400.0),
+        ChannelSpend(channel="Google Demand Gen", spend=100.0, orders=50, revenue=150.0),
+        ChannelSpend(channel="Bing Generic Paid Search", spend=100.0, orders=10, revenue=50.0),
     ]
     rows = build_report(spend_data, _TARGETS)
 
-    assert len(rows) == 3
     total = 500.0
     meta_row = next(r for r in rows if r.channel == "Meta Ads")
     assert meta_row.actual_spend == pytest.approx(300.0)
@@ -143,15 +166,39 @@ def test_build_report_calculates_actual_pct() -> None:
     assert meta_row.delta_pct == pytest.approx(meta_row.actual_pct - 28.7)
 
 
+def test_build_report_fuzzy_matches_demand_gen() -> None:
+    spend_data = [
+        ChannelSpend(channel="Google Demand Gen", spend=200.0, orders=10, revenue=300.0),
+    ]
+    rows = build_report(spend_data, [ChannelTarget(channel="Demand Gen", target_pct=10.2)])
+    assert rows[0].actual_spend == pytest.approx(200.0)
+
+
+def test_build_report_fuzzy_matches_bing_paid_search() -> None:
+    spend_data = [
+        ChannelSpend(channel="Bing Generic Paid Search", spend=50.0, orders=5, revenue=80.0),
+    ]
+    rows = build_report(spend_data, [ChannelTarget(channel="Bing Generic Search", target_pct=2.2)])
+    assert rows[0].actual_spend == pytest.approx(50.0)
+
+
+def test_build_report_fuzzy_matches_email_tool_cost() -> None:
+    spend_data = [
+        ChannelSpend(channel="Email", spend=30.0, orders=2, revenue=50.0),
+    ]
+    rows = build_report(spend_data, [ChannelTarget(channel="Email (Tool Cost)", target_pct=0.1)])
+    assert rows[0].actual_spend == pytest.approx(30.0)
+
+
 def test_build_report_zero_spend_for_missing_channel() -> None:
     spend_data = [
-        ChannelSpend(channel="Meta Ads", spend=500.0, conversions=100, revenue=600.0),
+        ChannelSpend(channel="Meta Ads", spend=500.0, orders=100, revenue=600.0),
     ]
     rows = build_report(spend_data, _TARGETS)
 
-    criteo_row = next(r for r in rows if r.channel == "Criteo")
-    assert criteo_row.actual_spend == 0.0
-    assert criteo_row.actual_pct == 0.0
+    bing_row = next(r for r in rows if "Bing" in r.channel)
+    assert bing_row.actual_spend == 0.0
+    assert bing_row.actual_pct == 0.0
 
 
 def test_build_report_empty_spend_gives_zero_pct() -> None:
@@ -224,18 +271,18 @@ def test_send_to_teams_posts_json() -> None:
 
 
 def test_getklar_client_raises_without_token() -> None:
-    with pytest.raises(EnvironmentError, match="GETKLAR_REFRESH_TOKEN"):
-        GetKlarClient(refresh_token="")
+    with pytest.raises(EnvironmentError, match="GETKLAR_API_TOKEN"):
+        GetKlarClient(api_token="")
 
 
 def test_build_from_env_raises_without_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("GETKLAR_REFRESH_TOKEN", raising=False)
-    with pytest.raises(EnvironmentError, match="GETKLAR_REFRESH_TOKEN"):
+    monkeypatch.delenv("GETKLAR_API_TOKEN", raising=False)
+    with pytest.raises(EnvironmentError, match="GETKLAR_API_TOKEN"):
         build_from_env()
 
 
 def test_getklar_client_caches_access_token() -> None:
-    client = GetKlarClient(refresh_token="fake-refresh-token")
+    client = GetKlarClient(api_token="fake-api-token")
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = {"accessToken": "at-123", "expiresIn": 300_000}
@@ -251,29 +298,71 @@ def test_getklar_client_caches_access_token() -> None:
     mock_post.assert_called_once()
 
 
-def test_getklar_client_fetch_spend_by_channel() -> None:
-    client = GetKlarClient(refresh_token="fake-refresh-token")
+def test_getklar_client_fetch_spend_by_channel_aggregates() -> None:
+    """fetch_spend_by_channel should aggregate ad-level rows by channelName."""
+    client = GetKlarClient(api_token="fake-api-token")
 
-    # Pre-set cached token to skip auth exchange.
     import time as _time
     client._access_token = "cached-token"
     client._access_token_expiry = _time.time() + 3600
 
+    # Two rows for the same channel (different ads), one for another channel.
     fake_rows = [
-        {"channel": "Meta Ads", "spend": 150.0, "conversions": 10, "revenue": 200.0},
-        {"channel": "Google Generic Search", "spend": 80.0, "conversions": 5, "revenue": 100.0},
+        {
+            "channelName": "Meta Ads",
+            "cost": 100.0,
+            "orders": 5,
+            "netRevenue": 150.0,
+        },
+        {
+            "channelName": "Meta Ads",
+            "cost": 50.0,
+            "orders": 2,
+            "netRevenue": 80.0,
+        },
+        {
+            "channelName": "Google Generic Search",
+            "cost": 80.0,
+            "orders": 3,
+            "netRevenue": 120.0,
+        },
     ]
     mock_resp = MagicMock()
-    mock_resp.json.return_value = {"data": fake_rows}
+    mock_resp.json.return_value = fake_rows
     mock_resp.raise_for_status = MagicMock()
 
     with patch("integrations.getklar.httpx.get", return_value=mock_resp):
         result = client.fetch_spend_by_channel(date(2026, 3, 30))
 
     assert len(result) == 2
-    assert result[0].channel == "Meta Ads"
-    assert result[0].spend == pytest.approx(150.0)
-    assert result[1].channel == "Google Generic Search"
+    meta = next(r for r in result if r.channel == "Meta Ads")
+    assert meta.spend == pytest.approx(150.0)  # 100 + 50
+    assert meta.orders == pytest.approx(7.0)   # 5 + 2
+
+    google = next(r for r in result if r.channel == "Google Generic Search")
+    assert google.spend == pytest.approx(80.0)
+
+
+def test_getklar_client_sorted_by_spend_desc() -> None:
+    client = GetKlarClient(api_token="fake-api-token")
+
+    import time as _time
+    client._access_token = "cached-token"
+    client._access_token_expiry = _time.time() + 3600
+
+    fake_rows = [
+        {"channelName": "Small Channel", "cost": 10.0, "orders": 1, "netRevenue": 15.0},
+        {"channelName": "Big Channel", "cost": 500.0, "orders": 20, "netRevenue": 800.0},
+    ]
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = fake_rows
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("integrations.getklar.httpx.get", return_value=mock_resp):
+        result = client.fetch_spend_by_channel(date(2026, 3, 30))
+
+    assert result[0].channel == "Big Channel"
+    assert result[1].channel == "Small Channel"
 
 
 def test_yesterday_is_one_day_before_today() -> None:

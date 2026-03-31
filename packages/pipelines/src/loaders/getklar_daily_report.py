@@ -11,9 +11,13 @@ Usage (specific date):
     python -m perf_marketing_pipelines.loaders.getklar_daily_report --date 2026-03-30
 
 Environment variables:
-    GETKLAR_REFRESH_TOKEN   (required) Long-lived token from Klar Frontend → Attribution API
+    GETKLAR_API_TOKEN       (required) Long-lived JWT from Klar Frontend
     GETKLAR_TEMPLATE_URL    (required) Google Sheets URL for channel allocation template
     TEAMS_WEBHOOK_URL       (optional) MS Teams incoming webhook; if unset, prints to stdout
+
+Scheduling (daily at 9:00 AM CET/CEST):
+    0 7 * * * cd /path/to/project && python -m perf_marketing_pipelines.loaders.getklar_daily_report
+    (7 UTC = 8/9 CET/CEST depending on DST)
 """
 from __future__ import annotations
 
@@ -114,12 +118,6 @@ def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
             lower = [c.lower().strip() for c in row]
             if "channel" in lower:
                 channel_col = lower.index("channel")
-                for i, h in enumerate(lower):
-                    if "%" in h or "spend" in h and i != channel_col:
-                        # First candidate is % Spend column
-                        if i != channel_col:
-                            # Try to find the "% Spend" column specifically
-                            pass
                 # Precise search for "% spend"
                 for i, h in enumerate(lower):
                     if "%" in h:
@@ -137,8 +135,12 @@ def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
             continue
 
         channel = row[channel_col].strip()
-        if not channel or channel.upper().startswith("TOTAL"):
+        if not channel:
             continue
+
+        # Stop at the TOTAL row — everything below is summary/KPI data.
+        if channel.upper().startswith("TOTAL"):
+            break
 
         pct_raw = row[pct_col].strip() if pct_col < len(row) else ""
         pct = _parse_percent(pct_raw)
@@ -163,6 +165,22 @@ class ReportRow:
     delta_pct: float  # actual_pct - target_pct
 
 
+def _normalise_channel(name: str) -> str:
+    """Normalise a channel name for fuzzy matching.
+
+    Strips noise words that differ between the template and the API:
+    - Removes "Google " prefix ("Google Demand Gen" → "demand gen")
+    - Removes " Paid" suffix ("Bing Generic Paid Search" → "bing generic search")
+    - Removes "(Tool Cost)" suffix ("Email (Tool Cost)" → "email")
+    - Lowercases and strips whitespace
+    """
+    n = name.lower().strip()
+    n = n.removeprefix("google ")
+    n = n.replace(" paid search", " search")
+    n = n.replace(" (tool cost)", "")
+    return n.strip()
+
+
 def build_report(
     spend_data: list[ChannelSpend],
     targets: list[ChannelTarget],
@@ -170,18 +188,27 @@ def build_report(
     """Compare actual spend against target allocations.
 
     Channels from the template but missing in actual data are shown with 0 spend.
+    Matching uses exact name first, then normalised fuzzy match.
     """
     total_spend = sum(s.spend for s in spend_data)
 
     # Build lookup: normalised channel name → spend
-    actual_by_channel: dict[str, float] = {}
+    actual_by_norm: dict[str, float] = {}
+    actual_by_exact: dict[str, float] = {}
     for s in spend_data:
-        actual_by_channel[s.channel.lower().strip()] = s.spend
+        actual_by_exact[s.channel.lower().strip()] = s.spend
+        actual_by_norm[_normalise_channel(s.channel)] = s.spend
 
     rows: list[ReportRow] = []
     for t in targets:
-        key = t.channel.lower().strip()
-        actual_spend = actual_by_channel.get(key, 0.0)
+        exact_key = t.channel.lower().strip()
+        norm_key = _normalise_channel(t.channel)
+
+        actual_spend = (
+            actual_by_exact.get(exact_key)
+            or actual_by_norm.get(norm_key)
+            or 0.0
+        )
         actual_pct = (actual_spend / total_spend * 100) if total_spend > 0 else 0.0
         delta = actual_pct - t.target_pct
         rows.append(

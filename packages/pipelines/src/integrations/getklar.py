@@ -3,15 +3,15 @@
 Provides spend-by-channel data for a given date via the GetKlar attribution endpoint.
 
 Authentication flow (two-token):
-  1. Use GETKLAR_REFRESH_TOKEN (long-lived, from Klar Frontend → Store Settings →
-     Attribution API) to obtain a short-lived access token.
+  1. Use GETKLAR_API_TOKEN (long-lived JWT from Klar frontend) to obtain a
+     short-lived access token via POST /public/auth/token.
   2. Use the access token as Bearer token to call GET /public/attribution.
 
+The API returns one row per ad (ad × date granularity). This module aggregates
+rows by channelName to produce per-channel totals.
+
 Required env vars:
-    GETKLAR_REFRESH_TOKEN   Long-lived token for the attribution API.
-                            Obtained from Klar Frontend (Store Settings → Attribution API).
-                            NOTE: This is DIFFERENT from GETKLAR_API_TOKEN which is used
-                            for the data-import API (open-api.getklar.com).
+    GETKLAR_API_TOKEN   Long-lived JWT from Klar Frontend (already in .env).
 """
 from __future__ import annotations
 
@@ -30,37 +30,36 @@ ATTRIBUTION_BASE_URL = "https://api.getklar.com"
 TOKEN_ENDPOINT = "/public/auth/token"
 ATTRIBUTION_ENDPOINT = "/public/attribution"
 
-# Default attribution model — marketing mix is the most balanced for spend comparison.
+# Default attribution model — marketing mix matches the template.
 DEFAULT_METRIC = "marketing_mix"
 DEFAULT_WINDOW = "28_day"
 
 
 @dataclass
 class ChannelSpend:
-    """Spend and attribution data for a single marketing channel."""
+    """Aggregated spend and attribution data for a single marketing channel."""
 
     channel: str
-    spend: float  # Actual ad spend in €
-    conversions: float
+    spend: float      # Total ad spend in € (sum of 'cost' across all ads in channel)
+    orders: float
     revenue: float
-    raw: dict[str, Any] = field(default_factory=dict)
+    raw_rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 class GetKlarClient:
     """Client for the GetKlar Attribution API.
 
     Args:
-        refresh_token: Long-lived token from Klar Frontend (Store Settings → Attribution API).
+        api_token: Long-lived JWT from Klar Frontend (GETKLAR_API_TOKEN).
         timeout: HTTP request timeout in seconds.
     """
 
-    def __init__(self, refresh_token: str, timeout: int = 30) -> None:
-        if not refresh_token:
+    def __init__(self, api_token: str, timeout: int = 60) -> None:
+        if not api_token:
             raise EnvironmentError(
-                "GETKLAR_REFRESH_TOKEN is required for the GetKlar Attribution API. "
-                "Obtain it from Klar Frontend: Store Settings → Attribution API."
+                "GETKLAR_API_TOKEN is required for the GetKlar Attribution API."
             )
-        self._refresh_token = refresh_token
+        self._api_token = api_token
         self._timeout = timeout
         self._access_token: str | None = None
         self._access_token_expiry: float = 0.0
@@ -70,7 +69,7 @@ class GetKlarClient:
     # ------------------------------------------------------------------
 
     def _get_access_token(self) -> str:
-        """Exchange the refresh token for a short-lived access token, with caching."""
+        """Exchange the long-lived token for a short-lived access token."""
         # 30-second safety margin before expiry.
         if self._access_token and time.time() < self._access_token_expiry - 30:
             return self._access_token
@@ -79,7 +78,7 @@ class GetKlarClient:
             f"{ATTRIBUTION_BASE_URL}{TOKEN_ENDPOINT}",
             headers={
                 "Content-Type": "application/json",
-                "token": self._refresh_token,
+                "token": self._api_token,
             },
             timeout=self._timeout,
         )
@@ -95,43 +94,50 @@ class GetKlarClient:
     # Public API
     # ------------------------------------------------------------------
 
-    def fetch_attribution_report(
+    def fetch_raw_rows(
         self,
         report_date: date,
         metric: str = DEFAULT_METRIC,
         window: str = DEFAULT_WINDOW,
     ) -> list[dict[str, Any]]:
-        """Fetch the full attribution report rows for a single date.
+        """Fetch raw attribution rows for a single date (ad-level granularity).
+
+        The API returns one row per ad×date combination. Use
+        :meth:`fetch_spend_by_channel` for channel-aggregated totals.
+
+        Note: The API requires startDate < endDate (single-day queries return empty).
+        We query startDate=report_date, endDate=report_date+1 and all returned rows
+        carry report_date as their date.
 
         Args:
-            report_date: The date to report on (yesterday for daily reports).
+            report_date: The date to report on.
             metric: Attribution model ('marketing_mix', 'last_touch', etc.)
             window: Attribution window ('28_day', '7_day', 'unlimited', etc.)
 
         Returns:
-            List of raw row dicts from the API ``data`` array.
+            List of raw row dicts. Key fields: channelName, cost, orders,
+            netRevenue, campaignName, adGroupName, adName, clicks, impressions.
         """
         access_token = self._get_access_token()
-        date_str = report_date.isoformat()
-        params = {
-            "startDate": date_str,
-            "endDate": date_str,
-            "metric": metric,
-            "window": window,
-            "date_breakdown": "order",
-        }
+        start_str = report_date.isoformat()
+        end_str = (report_date + timedelta(days=1)).isoformat()
         resp = httpx.get(
             f"{ATTRIBUTION_BASE_URL}{ATTRIBUTION_ENDPOINT}",
             headers={"Authorization": f"Bearer {access_token}"},
-            params=params,
+            params={
+                "startDate": start_str,
+                "endDate": end_str,
+                "metric": metric,
+                "window": window,
+                "date_breakdown": "order",
+            },
             timeout=self._timeout,
         )
         resp.raise_for_status()
-        payload = resp.json()
-        rows: list[dict[str, Any]] = payload.get("data") or []
+        rows: list[dict[str, Any]] = resp.json() or []
         log.info(
             "getklar.attribution.fetched",
-            date=date_str,
+            date=start_str,
             metric=metric,
             rows=len(rows),
         )
@@ -143,53 +149,55 @@ class GetKlarClient:
         metric: str = DEFAULT_METRIC,
         window: str = DEFAULT_WINDOW,
     ) -> list[ChannelSpend]:
-        """Return spend grouped by channel for a given date.
+        """Return spend aggregated by channel for a given date.
 
-        The attribution API returns one row per channel (or per channel/date combo).
-        This method normalises rows into :class:`ChannelSpend` objects.
+        Sums ``cost``, ``orders``, and ``netRevenue`` across all ad-level rows
+        for each unique ``channelName``.
 
-        Known response fields (from API exploration):
-            - ``channel`` / ``channelName`` / ``source`` — channel name
-            - ``spend`` / ``cost`` / ``adSpend`` — ad spend in €
-            - ``conversions`` — attributed conversions
-            - ``revenue`` — attributed revenue
+        Args:
+            report_date: The date to report on (yesterday for daily reports).
+            metric: Attribution model.
+            window: Attribution window.
 
-        If the API response structure differs, raw rows are logged at DEBUG level
-        so the field names can be inspected and this method updated.
+        Returns:
+            List of :class:`ChannelSpend`, one per channel, sorted by spend desc.
         """
-        rows = self.fetch_attribution_report(report_date, metric=metric, window=window)
+        rows = self.fetch_raw_rows(report_date, metric=metric, window=window)
 
-        if rows:
-            log.debug("getklar.attribution.sample_row", row=rows[0])
-
-        result: list[ChannelSpend] = []
+        # Aggregate by channelName.
+        aggregated: dict[str, dict[str, Any]] = {}
         for row in rows:
-            channel = (
-                row.get("channel")
-                or row.get("channelName")
-                or row.get("source")
-                or row.get("name")
-                or "Unknown"
-            )
-            spend = float(
-                row.get("spend")
-                or row.get("cost")
-                or row.get("adSpend")
-                or row.get("marketingSpend")
-                or 0
-            )
-            conversions = float(row.get("conversions") or 0)
-            revenue = float(row.get("revenue") or 0)
-            result.append(
-                ChannelSpend(
-                    channel=str(channel),
-                    spend=spend,
-                    conversions=conversions,
-                    revenue=revenue,
-                    raw=dict(row),
-                )
-            )
+            channel = str(row.get("channelName") or "Unknown")
+            if channel not in aggregated:
+                aggregated[channel] = {
+                    "spend": 0.0,
+                    "orders": 0.0,
+                    "revenue": 0.0,
+                    "raw_rows": [],
+                }
+            aggregated[channel]["spend"] += float(row.get("cost") or 0)
+            aggregated[channel]["orders"] += float(row.get("orders") or 0)
+            aggregated[channel]["revenue"] += float(row.get("netRevenue") or 0)
+            aggregated[channel]["raw_rows"].append(row)
 
+        result = [
+            ChannelSpend(
+                channel=ch,
+                spend=agg["spend"],
+                orders=agg["orders"],
+                revenue=agg["revenue"],
+                raw_rows=agg["raw_rows"],
+            )
+            for ch, agg in aggregated.items()
+        ]
+        result.sort(key=lambda x: x.spend, reverse=True)
+
+        log.info(
+            "getklar.attribution.by_channel",
+            date=report_date.isoformat(),
+            channels=len(result),
+            total_spend=sum(c.spend for c in result),
+        )
         return result
 
 
@@ -197,15 +205,14 @@ def build_from_env() -> GetKlarClient:
     """Construct a :class:`GetKlarClient` from environment variables.
 
     Reads:
-        GETKLAR_REFRESH_TOKEN  (required)
+        GETKLAR_API_TOKEN  (required)
     """
-    refresh_token = os.environ.get("GETKLAR_REFRESH_TOKEN", "")
-    if not refresh_token:
+    api_token = os.environ.get("GETKLAR_API_TOKEN", "")
+    if not api_token:
         raise EnvironmentError(
-            "GETKLAR_REFRESH_TOKEN environment variable is not set. "
-            "Obtain it from Klar Frontend: Store Settings → Attribution API."
+            "GETKLAR_API_TOKEN environment variable is not set."
         )
-    return GetKlarClient(refresh_token=refresh_token)
+    return GetKlarClient(api_token=api_token)
 
 
 def yesterday() -> date:
