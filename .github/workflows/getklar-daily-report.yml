@@ -17,7 +17,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -e packages/pipelines
+        run: pip install packages/pipelines
 
       - name: Run GetKlar daily report
         env:
@@ -25,5 +25,4 @@ jobs:
           GETKLAR_TEMPLATE_URL: ${{ secrets.GETKLAR_TEMPLATE_URL }}
           TEAMS_WEBHOOK_URL: ${{ secrets.TEAMS_WEBHOOK_URL }}
         run: |
-          cd packages/pipelines
-          python -m src.loaders.getklar_daily_report
+          PYTHONPATH=packages/pipelines/src python -m loaders.getklar_daily_report
