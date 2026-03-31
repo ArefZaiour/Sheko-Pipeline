@@ -1,16 +1,16 @@
-"""Dropbox integration for downloading PNG files from shared folder links.
+"""Dropbox integration — download PNGs from a shared folder via zip.
 
-Required env var:
-    DROPBOX_ACCESS_TOKEN — Dropbox app access token with shared_link.metadata permissions.
-
-API reference:
-    POST https://api.dropboxapi.com/2/files/list_folder  (list shared folder)
-    POST https://content.dropboxapi.com/2/sharing/get_shared_link_file  (download)
+No Dropbox API token required.  Appending ``dl=1`` to any public Dropbox
+shared-folder URL triggers a zip download of the entire folder.  We extract
+PNGs from the ``normal/`` subfolder (case-insensitive) in-memory and write
+them to the local filesystem.
 """
 from __future__ import annotations
 
-import json
-import os
+import html
+import io
+import re
+import zipfile
 from pathlib import Path
 
 import httpx
@@ -18,96 +18,81 @@ import structlog
 
 log = structlog.get_logger(__name__)
 
-_DROPBOX_API = "https://api.dropboxapi.com/2"
-_DROPBOX_CONTENT = "https://content.dropboxapi.com/2"
+_SLACK_URL_RE = re.compile(r"<(https?://[^|>]+)[|>]")
+_HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 perf-marketing-pipelines/1.0"}
 
 
-class DropboxSharedFolderClient:
-    """Downloads files from a Dropbox shared folder link.
+def parse_dropbox_url(slack_mrkdwn: str) -> str | None:
+    """Extract and HTML-unescape a Dropbox URL from Slack mrkdwn text.
 
-    Args:
-        access_token: Dropbox app access token.
+    Slack encodes ``&`` as ``&amp;`` inside attachment text fields.
+
+    Returns:
+        Unescaped Dropbox URL, or ``None`` if none found.
     """
+    for raw in _SLACK_URL_RE.findall(slack_mrkdwn):
+        unescaped = html.unescape(raw)
+        if "dropbox.com" in unescaped:
+            return unescaped
+    return None
 
-    def __init__(self, access_token: str) -> None:
-        self._token = access_token
 
-    def list_pngs_in_normal(self, folder_url: str) -> list[str]:
-        """Return PNG filenames found in the /Normal subfolder of *folder_url*.
+def _make_zip_url(folder_url: str) -> str:
+    """Return the zip-download variant of a Dropbox shared-folder URL."""
+    if "dl=0" in folder_url:
+        return folder_url.replace("dl=0", "dl=1")
+    if "dl=1" not in folder_url:
+        sep = "&" if "?" in folder_url else "?"
+        return folder_url + sep + "dl=1"
+    return folder_url
 
-        Args:
-            folder_url: Dropbox shared folder URL (https://www.dropbox.com/sh/...).
 
-        Returns:
-            List of filenames (e.g. ``["creative_1.png", "creative_2.png"]``).
-        """
-        resp = httpx.post(
-            f"{_DROPBOX_API}/files/list_folder",
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Content-Type": "application/json",
-            },
-            json={"path": "/Normal", "shared_link": {"url": folder_url}},
-            timeout=30,
-        )
+def download_normal_pngs(
+    folder_url: str,
+    dest_dir: Path,
+    timeout: int = 120,
+) -> list[Path]:
+    """Download all PNGs from the ``normal/`` subfolder of a Dropbox shared folder.
+
+    Fetches the folder as a zip (no API token needed), extracts PNGs whose
+    path starts with ``normal/`` (case-insensitive), writes them to *dest_dir*,
+    and skips already-existing files.
+
+    Returns:
+        List of paths present after this call (downloaded + pre-existing).
+    """
+    zip_url = _make_zip_url(folder_url)
+    log.info("dropbox.zip.downloading", url=zip_url[:80])
+
+    with httpx.Client(follow_redirects=True, timeout=timeout, headers=_HTTP_HEADERS) as http:
+        resp = http.get(zip_url)
         resp.raise_for_status()
-        entries = resp.json().get("entries", [])
-        return [
-            e["name"]
-            for e in entries
-            if e.get(".tag") == "file" and e["name"].lower().endswith(".png")
-        ]
 
-    def download_png(self, folder_url: str, filename: str, dest: Path) -> bool:
-        """Download a single PNG from the /Normal subfolder to *dest*.
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(resp.content))
+    except zipfile.BadZipFile as exc:
+        log.error("dropbox.zip.bad", error=str(exc), size=len(resp.content))
+        raise
 
-        Skips the download if *dest* already exists.
+    normal_entries = [
+        name for name in zf.namelist()
+        if name.lower().startswith("normal/") and name.lower().endswith(".png")
+    ]
+    log.info("dropbox.zip.normal_pngs", count=len(normal_entries))
 
-        Args:
-            folder_url: Dropbox shared folder URL.
-            filename: PNG filename within /Normal (e.g. ``"creative_1.png"``).
-            dest: Full local path to write the file.
+    if not normal_entries:
+        return []
 
-        Returns:
-            True if the file was downloaded, False if it was skipped.
-        """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    result: list[Path] = []
+    for entry in normal_entries:
+        filename = Path(entry).name
+        dest = dest_dir / filename
         if dest.exists():
-            log.info("dropbox.file.skip_existing", path=str(dest))
-            return False
+            log.info("dropbox.png.skip_existing", path=str(dest))
+        else:
+            dest.write_bytes(zf.read(entry))
+            log.info("dropbox.png.saved", path=str(dest), size=dest.stat().st_size)
+        result.append(dest)
 
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        api_arg = json.dumps({"url": folder_url, "path": f"/Normal/{filename}"})
-        resp = httpx.post(
-            f"{_DROPBOX_CONTENT}/sharing/get_shared_link_file",
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Dropbox-API-Arg": api_arg,
-            },
-            timeout=120,
-        )
-        resp.raise_for_status()
-        dest.write_bytes(resp.content)
-        size_kb = dest.stat().st_size // 1024
-        log.info(
-            "dropbox.file.downloaded",
-            filename=filename,
-            path=str(dest),
-            size_kb=size_kb,
-        )
-        return True
-
-
-def build_from_env() -> DropboxSharedFolderClient:
-    """Construct a :class:`DropboxSharedFolderClient` from environment variables.
-
-    Required env var:
-        DROPBOX_ACCESS_TOKEN
-    """
-    token = os.environ.get("DROPBOX_ACCESS_TOKEN", "")
-    if not token:
-        raise EnvironmentError(
-            "DROPBOX_ACCESS_TOKEN environment variable is not set. "
-            "Create a Dropbox app with shared_link.metadata permission and "
-            "generate an access token, then set it in your .env file."
-        )
-    return DropboxSharedFolderClient(access_token=token)
+    return result

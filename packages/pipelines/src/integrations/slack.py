@@ -1,100 +1,72 @@
-"""Slack monitor for native ad creative packages.
+"""Slack monitor for NATIVE_MS native-ad creative packages.
 
-Polls the ext-sheko channel (C09FCDHFGCU) for messages matching the
-``Native_`` pattern, extracts the external URL, follows redirects to the
-Dropbox shared folder, and downloads all PNGs from the ``Normal`` subfolder.
+Polls the ext-sheko channel for Asana bot messages whose attachment title
+starts with ``NATIVE_MS``.  For each match it extracts the Dropbox
+shared-folder URL from the attachment text, downloads the folder as a zip,
+and saves PNGs from the ``normal/`` subfolder.
 
-Pipeline:
-    Slack message (Native_MS) → extract URL → follow redirect → Dropbox
-    shared folder → /Normal/ folder → download PNGs
+Real message structure (confirmed against live channel 2026-03-31):
+  - ``msg.text``: always ``"New Ad ist ready to test"`` — not useful
+  - ``msg.attachments[n].title``: ad name, e.g. ``NATIVE_MS_2173_STATIC_...``
+  - ``msg.attachments[n].text``: Dropbox folder link in Slack mrkdwn
+    ``<url|label>`` format with ``&amp;``-encoded ampersands
+
+Important: do NOT pass ``oldest`` to ``conversations.history``.  Slack
+restricts that endpoint to post-join messages for recently-added bots.
+We fetch the latest 200 messages and apply cursor filtering in Python
+via ``resp.data["messages"]``.
 
 Required env vars:
-    SLACK_BOT_TOKEN        — Bot token with channels:history scope.
-    DROPBOX_ACCESS_TOKEN   — Dropbox app token with shared_link.metadata.
+    SLACK_BOT_TOKEN    — Bot token with ``channels:history`` scope.
 
 Optional env vars:
-    SLACK_CHANNEL_ID   — Override default channel (C09FCDHFGCU / ext-sheko).
+    SLACK_CHANNEL_ID   — Channel to monitor (default: C09FCDHFGCU / ext-sheko).
 """
 from __future__ import annotations
 
 import os
-import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import httpx
 import structlog
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-from integrations.dropbox import DropboxSharedFolderClient
+from integrations.dropbox import download_normal_pngs, parse_dropbox_url
 
 log = structlog.get_logger(__name__)
 
-# Default channel to monitor — overridable via env.
 DEFAULT_CHANNEL_ID = "C09FCDHFGCU"
-# Polling interval in seconds when running in loop mode.
 DEFAULT_POLL_INTERVAL = 60
-
-# Matches messages relevant to native ad packages (e.g. Native_MS, Native_FB).
-NATIVE_AD_PATTERN = re.compile(r"Native_", re.IGNORECASE)
-# Extracts the first URL found in a string.
-URL_PATTERN = re.compile(r"https?://\S+")
-
-
-def _safe_filename(name: str) -> str:
-    """Sanitize a filename, replacing non-alphanumeric characters (except . - _)."""
-    return re.sub(r"[^\w.\-]", "_", name)
-
-
-def _is_native_ad_message(text: str) -> bool:
-    """Return True if *text* matches the Native_ ad package pattern."""
-    return bool(NATIVE_AD_PATTERN.search(text))
-
-
-def _extract_first_url(text: str) -> str | None:
-    """Extract the first URL from *text*, or None if none found."""
-    match = URL_PATTERN.search(text)
-    return match.group(0) if match else None
-
-
-def _resolve_redirect(url: str, timeout: int = 30) -> str:
-    """Follow HTTP redirects and return the final URL."""
-    with httpx.Client(follow_redirects=True, timeout=timeout) as http:
-        resp = http.get(url)
-        return str(resp.url)
 
 
 class SlackNativeAdMonitor:
-    """Monitors a Slack channel for native ad messages and downloads the PNGs.
+    """Polls a Slack channel for NATIVE_MS ad packages and downloads PNGs.
 
-    For each message matching ``Native_``, the monitor:
-    1. Extracts the external URL from the message text.
-    2. Follows HTTP redirects to arrive at the Dropbox shared folder URL.
-    3. Lists PNG files inside the ``/Normal`` subfolder via the Dropbox API.
-    4. Downloads each PNG to ``<download_dir>/<YYYY-MM-DD>/<filename>``.
+    For each ``NATIVE_MS`` attachment:
+    1. Parses the Dropbox shared-folder URL from ``attachment.text``.
+    2. Downloads the folder as a zip (no Dropbox API token needed).
+    3. Saves PNGs from ``normal/`` to
+       ``<download_dir>/<YYYY-MM-DD>/<ad_title>/<filename>``.
 
     Args:
         bot_token: Slack bot token with ``channels:history`` scope.
-        dropbox_client: Configured :class:`~integrations.dropbox.DropboxSharedFolderClient`.
         channel_id: Slack channel ID to monitor.
-        download_dir: Root directory where PNGs will be saved.
-        oldest_ts: Only fetch messages newer than this Unix timestamp string.
-            Pass None to default to the last 24 hours on first run.
+        download_dir: Root directory for downloaded PNGs.
+        oldest_ts: Only process messages newer than this Unix timestamp string.
+            Defaults to 24 h ago on first run.
     """
 
     def __init__(
         self,
         bot_token: str,
-        dropbox_client: DropboxSharedFolderClient,
         channel_id: str = DEFAULT_CHANNEL_ID,
         download_dir: Path | str = Path("downloads/slack"),
         oldest_ts: str | None = None,
     ) -> None:
         self._client = WebClient(token=bot_token)
-        self._dropbox = dropbox_client
         self.channel_id = channel_id
         self.download_dir = Path(download_dir)
         self._cursor_ts: str | None = oldest_ts
@@ -104,22 +76,20 @@ class SlackNativeAdMonitor:
     # ------------------------------------------------------------------
 
     def poll_once(self) -> list[Path]:
-        """Fetch new messages and download PNGs from Dropbox for each match.
+        """Fetch new NATIVE_MS messages and download their PNGs.
 
         Returns:
-            List of local paths to PNG files that were downloaded.
+            All local PNG paths saved (or already present) during this call.
         """
-        messages = self._fetch_native_ad_messages()
+        messages = self._fetch_native_ms_messages()
         if not messages:
-            log.info("slack.poll", channel=self.channel_id, native_ad_messages=0)
+            log.info("slack.poll", channel=self.channel_id, native_ms_messages=0)
             return []
 
-        downloaded: list[Path] = []
+        all_paths: list[Path] = []
         for msg in messages:
-            paths = self._process_message(msg)
-            downloaded.extend(paths)
+            all_paths.extend(self._process_message(msg))
 
-        # Advance cursor to newest message so next poll only sees newer msgs.
         newest_ts = messages[-1].get("ts")
         if newest_ts:
             self._cursor_ts = newest_ts
@@ -127,13 +97,13 @@ class SlackNativeAdMonitor:
         log.info(
             "slack.poll",
             channel=self.channel_id,
-            native_ad_messages=len(messages),
-            pngs_downloaded=len(downloaded),
+            native_ms_messages=len(messages),
+            pngs_downloaded=len(all_paths),
         )
-        return downloaded
+        return all_paths
 
     def run_loop(self, interval: int = DEFAULT_POLL_INTERVAL) -> None:
-        """Poll the channel in a blocking loop. Ctrl-C to stop."""
+        """Poll continuously until interrupted (Ctrl-C)."""
         log.info("slack.loop.start", channel=self.channel_id, interval_s=interval)
         while True:
             try:
@@ -148,97 +118,76 @@ class SlackNativeAdMonitor:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _fetch_native_ad_messages(self) -> list[dict[str, Any]]:
-        """Return messages newer than the cursor that match the Native_ pattern."""
-        kwargs: dict[str, Any] = {"channel": self.channel_id, "limit": 200}
-        if self._cursor_ts:
-            kwargs["oldest"] = self._cursor_ts
-        else:
-            kwargs["oldest"] = str(time.time() - 86400)
+    def _fetch_native_ms_messages(self) -> list[dict[str, Any]]:
+        """Return messages newer than cursor that have a NATIVE_MS attachment.
 
+        We intentionally omit ``oldest`` from the API call because Slack
+        restricts ``conversations.history`` to post-join messages when that
+        parameter is supplied to a recently-joined bot.  Cursor filtering is
+        applied in Python on ``resp.data["messages"]``.
+        """
         try:
-            resp = self._client.conversations_history(**kwargs)
+            resp = self._client.conversations_history(
+                channel=self.channel_id, limit=200
+            )
         except SlackApiError as exc:
             log.error("slack.conversations_history.error", error=str(exc))
             raise
 
-        messages: list[dict[str, Any]] = resp.get("messages") or []
-        # Slack returns newest-first; reverse so we process oldest first.
-        messages.reverse()
+        messages: list[dict[str, Any]] = resp.data.get("messages") or []
+        messages.reverse()  # Slack returns newest-first; process oldest first
 
-        # Exclude the exact cursor message (already processed).
         if self._cursor_ts:
-            messages = [m for m in messages if m.get("ts") != self._cursor_ts]
+            cursor = float(self._cursor_ts)
+            messages = [m for m in messages if float(m.get("ts") or 0) > cursor]
+        else:
+            cutoff = time.time() - 86400
+            messages = [m for m in messages if float(m.get("ts") or 0) > cutoff]
 
-        # Keep only messages whose text matches the Native_ pattern.
-        return [m for m in messages if _is_native_ad_message(m.get("text") or "")]
+        return [m for m in messages if self._has_native_ms_attachment(m)]
+
+    @staticmethod
+    def _has_native_ms_attachment(msg: dict[str, Any]) -> bool:
+        return any(
+            att.get("title", "").startswith("NATIVE_MS")
+            for att in msg.get("attachments") or []
+        )
 
     def _process_message(self, msg: dict[str, Any]) -> list[Path]:
-        """Handle a single Native_ message: resolve URL, download PNGs.
-
-        Returns list of paths to downloaded PNG files.
-        """
-        text: str = msg.get("text") or ""
+        """Download PNGs for all NATIVE_MS attachments in *msg*."""
         msg_ts: str = msg.get("ts") or ""
-
-        url = _extract_first_url(text)
-        if not url:
-            log.warning("slack.message.no_url", ts=msg_ts, text=text[:120])
-            return []
-
-        log.info("slack.message.processing", ts=msg_ts, url=url)
-
         try:
-            dropbox_url = _resolve_redirect(url)
-        except httpx.HTTPError as exc:
-            log.error("slack.message.redirect_error", url=url, error=str(exc))
-            return []
-
-        if "dropbox.com" not in dropbox_url:
-            log.warning(
-                "slack.message.not_dropbox",
-                original_url=url,
-                resolved_url=dropbox_url,
-            )
-            return []
-
-        try:
-            png_filenames = self._dropbox.list_pngs_in_normal(dropbox_url)
-        except httpx.HTTPError as exc:
-            log.error("dropbox.list_error", dropbox_url=dropbox_url, error=str(exc))
-            return []
-
-        if not png_filenames:
-            log.info("dropbox.normal.no_pngs", dropbox_url=dropbox_url)
-            return []
-
-        # Organise downloads by date derived from Slack message timestamp.
-        try:
-            ts_float = float(msg_ts) if msg_ts else time.time()
-        except ValueError:
+            ts_float = float(msg_ts)
+        except (ValueError, TypeError):
             ts_float = time.time()
-        date_str = datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime(
-            "%Y-%m-%d"
-        )
-        dest_dir = self.download_dir / date_str
+        date_str = datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
 
         result: list[Path] = []
-        for filename in png_filenames:
-            dest = dest_dir / _safe_filename(filename)
-            try:
-                self._dropbox.download_png(dropbox_url, filename, dest)
-            except httpx.HTTPError as exc:
-                log.error("dropbox.download_error", filename=filename, error=str(exc))
+        for att in msg.get("attachments") or []:
+            title: str = att.get("title", "")
+            if not title.startswith("NATIVE_MS"):
                 continue
-            if dest.exists():
-                result.append(dest)
+
+            dropbox_url = parse_dropbox_url(att.get("text", ""))
+            if not dropbox_url:
+                log.warning("slack.attachment.no_dropbox_url", title=title)
+                continue
+
+            dest_dir = self.download_dir / date_str / title
+            log.info("slack.attachment.processing", title=title, dest=str(dest_dir))
+
+            try:
+                paths = download_normal_pngs(dropbox_url, dest_dir)
+            except Exception as exc:  # noqa: BLE001
+                log.error("slack.attachment.download_failed", title=title, error=str(exc))
+                continue
+
+            result.extend(paths)
 
         return result
 
 
-# ---------------------------------------------------------------------------
-# Backward-compat alias — existing imports of SlackFileDownloader still work.
-# ---------------------------------------------------------------------------
+# Backwards-compatibility alias.
 SlackFileDownloader = SlackNativeAdMonitor
 
 
@@ -248,27 +197,21 @@ def build_from_env(
 ) -> SlackNativeAdMonitor:
     """Construct a :class:`SlackNativeAdMonitor` from environment variables.
 
-    Required env vars:
+    Required:
         SLACK_BOT_TOKEN
-        DROPBOX_ACCESS_TOKEN
 
-    Optional env vars:
-        SLACK_CHANNEL_ID  (default: C09FCDHFGCU / ext-sheko)
+    Optional:
+        SLACK_CHANNEL_ID  (default: C09FCDHFGCU)
     """
-    slack_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    if not slack_token:
+    token = os.environ.get("SLACK_BOT_TOKEN", "")
+    if not token:
         raise EnvironmentError(
-            "SLACK_BOT_TOKEN environment variable is not set. "
+            "SLACK_BOT_TOKEN is not set. "
             "Create a Slack app with channels:history scope and set the bot token."
         )
-
-    from integrations.dropbox import build_from_env as dropbox_from_env
-
-    dropbox_client = dropbox_from_env()
     channel_id = os.environ.get("SLACK_CHANNEL_ID", DEFAULT_CHANNEL_ID)
     return SlackNativeAdMonitor(
-        bot_token=slack_token,
-        dropbox_client=dropbox_client,
+        bot_token=token,
         channel_id=channel_id,
         download_dir=download_dir,
         oldest_ts=oldest_ts,
