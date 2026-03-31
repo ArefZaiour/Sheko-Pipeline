@@ -1,0 +1,23 @@
+{
+  "name": "performance-marketing-platform",
+  "private": true,
+  "workspaces": [
+    "packages/dashboard",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0",
+    "prettier": "^3.0.0"
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "tabWidth": 2
+  }
+}

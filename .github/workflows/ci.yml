@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pipelines:
+    name: Python pipelines
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/pipelines
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: ruff check src tests
+      - run: black --check src tests
+      - run: mypy src
+      - run: pytest
+
+  dashboard:
+    name: Dashboard (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci --workspaces --include-workspace-root
+        working-directory: .
+      - run: npm run lint
+      - run: npm run test -- --passWithNoTests
+      - run: npm run build
