@@ -375,8 +375,28 @@ def _roas_color(actual: float, target: float) -> str:
     return "attention"
 
 
+def _build_channel_line(r: ReportRow) -> str:
+    """Format a single channel as a compact line for mobile-friendly display."""
+    delta_sign = "+" if r.delta_pct >= 0 else ""
+    icon = _delta_icon(r.delta_pct)
+    return (
+        f"**{r.channel}**\n"
+        f"Spend: {r.actual_spend:,.0f}€ · Ist {r.actual_pct:.1f}% · Soll {r.target_pct:.1f}% · {icon} {delta_sign}{r.delta_pct:.1f}%"
+    )
+
+
+def _build_attribution_line(r: ReportRow) -> str:
+    """Format a single channel's attribution data as a compact line."""
+    roas_icon = "✅" if r.target_roas > 0 and r.actual_roas >= r.target_roas else "⚠️"
+    return (
+        f"**{r.channel}**\n"
+        f"Rev: {r.actual_revenue:,.0f}€ · ROAS: {roas_icon} {r.actual_roas:.2f}x (Soll {r.target_roas:.2f}x) · "
+        f"Orders: {r.actual_orders:,.0f} · CAC: {r.actual_cac:,.0f}€"
+    )
+
+
 def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, Any]:
-    """Build a rich Adaptive Card with spend allocation + attribution comparison."""
+    """Build a mobile-friendly Adaptive Card using single-column TextBlocks."""
     total_spend = sum(r.actual_spend for r in rows)
     total_rev = sum(r.actual_revenue for r in rows)
     total_orders = sum(r.actual_orders for r in rows)
@@ -391,129 +411,69 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, 
             "wrap": True,
         },
         {
-            "type": "ColumnSet",
-            "spacing": "Small",
-            "columns": [
-                {"type": "Column", "width": "stretch", "items": [
-                    {"type": "TextBlock", "text": f"💰 Spend: **{total_spend:,.0f}€**", "size": "Small", "wrap": True}
-                ]},
-                {"type": "Column", "width": "stretch", "items": [
-                    {"type": "TextBlock", "text": f"📈 Revenue: **{total_rev:,.0f}€**", "size": "Small", "wrap": True}
-                ]},
-                {"type": "Column", "width": "stretch", "items": [
-                    {"type": "TextBlock", "text": f"🎯 ROAS: **{blended_roas:.2f}x**", "size": "Small", "wrap": True}
-                ]},
-                {"type": "Column", "width": "stretch", "items": [
-                    {"type": "TextBlock", "text": f"🛒 Orders: **{total_orders:,.0f}**", "size": "Small", "wrap": True}
-                ]},
+            "type": "FactSet",
+            "facts": [
+                {"title": "💰 Spend", "value": f"{total_spend:,.0f}€"},
+                {"title": "📈 Revenue", "value": f"{total_rev:,.0f}€"},
+                {"title": "🎯 ROAS", "value": f"{blended_roas:.2f}x"},
+                {"title": "🛒 Orders", "value": f"{total_orders:,.0f}"},
             ],
         },
         # --- Section 1: Spend Allocation ---
         {
             "type": "TextBlock",
-            "text": "**Spend Allocation (Ist vs Soll)**",
+            "text": "━━━ **Spend Allocation (Ist vs Soll)** ━━━",
             "separator": True,
             "spacing": "Medium",
-            "weight": "Bolder",
+            "wrap": True,
         },
-        {"type": "ColumnSet", "spacing": "Small", "columns": [
-            {"type": "Column", "width": "stretch", "items": [
-                {"type": "TextBlock", "text": "**Channel**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Spend**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Ist %**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Soll %**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Delta**", "weight": "Bolder", "size": "Small"}
-            ]},
-        ]},
     ]
 
+    # Each channel as a compact text block
     for r in rows:
-        delta_sign = "+" if r.delta_pct >= 0 else ""
-        icon = _delta_icon(r.delta_pct)
-        color = _delta_color(r.delta_pct)
         body.append({
-            "type": "ColumnSet", "spacing": "Small", "columns": [
-                {"type": "Column", "width": "stretch", "items": [
-                    {"type": "TextBlock", "text": r.channel, "size": "Small", "wrap": True}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.actual_spend:,.0f}€", "size": "Small"}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.actual_pct:.1f}%", "size": "Small"}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.target_pct:.1f}%", "size": "Small"}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{icon} {delta_sign}{r.delta_pct:.1f}%", "size": "Small", "color": color}
-                ]},
-            ],
+            "type": "TextBlock",
+            "text": _build_channel_line(r),
+            "wrap": True,
+            "spacing": "Small",
+            "size": "Small",
         })
+
+    # Total line
+    body.append({
+        "type": "TextBlock",
+        "text": f"**TOTAL: {total_spend:,.0f}€**",
+        "weight": "Bolder",
+        "spacing": "Small",
+        "size": "Small",
+    })
 
     # --- Section 2: Marketing Mix Attribution ---
-    body.extend([
-        {
-            "type": "TextBlock",
-            "text": "**Marketing Mix Attribution (Ist vs Soll)**",
-            "separator": True,
-            "spacing": "Medium",
-            "weight": "Bolder",
-        },
-        {"type": "ColumnSet", "spacing": "Small", "columns": [
-            {"type": "Column", "width": "stretch", "items": [
-                {"type": "TextBlock", "text": "**Channel**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Rev (€)**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**ROAS**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Soll**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**Orders**", "weight": "Bolder", "size": "Small"}
-            ]},
-            {"type": "Column", "width": "auto", "items": [
-                {"type": "TextBlock", "text": "**CAC**", "weight": "Bolder", "size": "Small"}
-            ]},
-        ]},
-    ])
+    body.append({
+        "type": "TextBlock",
+        "text": "━━━ **Marketing Mix Attribution (Ist vs Soll)** ━━━",
+        "separator": True,
+        "spacing": "Medium",
+        "wrap": True,
+    })
 
     for r in rows:
-        roas_c = _roas_color(r.actual_roas, r.target_roas)
         body.append({
-            "type": "ColumnSet", "spacing": "Small", "columns": [
-                {"type": "Column", "width": "stretch", "items": [
-                    {"type": "TextBlock", "text": r.channel, "size": "Small", "wrap": True}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.actual_revenue:,.0f}€", "size": "Small"}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.actual_roas:.2f}x", "size": "Small", "color": roas_c}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.target_roas:.2f}x", "size": "Small"}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.actual_orders:,.0f}", "size": "Small"}
-                ]},
-                {"type": "Column", "width": "auto", "items": [
-                    {"type": "TextBlock", "text": f"{r.actual_cac:,.0f}€", "size": "Small"}
-                ]},
-            ],
+            "type": "TextBlock",
+            "text": _build_attribution_line(r),
+            "wrap": True,
+            "spacing": "Small",
+            "size": "Small",
         })
+
+    body.append({
+        "type": "TextBlock",
+        "text": f"**TOTAL: {total_rev:,.0f}€ Rev · {blended_roas:.2f}x ROAS · {total_orders:,.0f} Orders**",
+        "weight": "Bolder",
+        "spacing": "Small",
+        "size": "Small",
+        "wrap": True,
+    })
 
     # Highlights
     over = sorted([r for r in rows if r.delta_pct > 2.0], key=lambda r: -r.delta_pct)
@@ -531,7 +491,7 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, 
     if highlights:
         body.append({
             "type": "TextBlock",
-            "text": "**Auffälligkeiten:**\n" + "\n".join(f"- {h}" for h in highlights),
+            "text": "**⚡ Auffälligkeiten:**\n" + "\n".join(f"- {h}" for h in highlights),
             "wrap": True,
             "separator": True,
             "spacing": "Medium",
