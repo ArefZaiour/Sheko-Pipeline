@@ -236,6 +236,12 @@ def _find_channel_spend(
     return None
 
 
+# Manual ROAS Soll overrides (board-requested, takes precedence over sheet values)
+ROAS_OVERRIDES: dict[str, float] = {
+    "Criteo": 1.4,
+}
+
+
 def build_report(
     spend_data: list[ChannelSpend],
     targets: list[ChannelTarget],
@@ -263,7 +269,7 @@ def build_report(
                 delta_pct=delta,
                 actual_revenue=actual_revenue,
                 actual_roas=actual_roas,
-                target_roas=t.roas_mm,
+                target_roas=ROAS_OVERRIDES.get(t.channel, t.roas_mm),
                 actual_orders=actual_orders,
                 target_nc_orders=t.nc_orders,
                 target_nc_rev=t.net_rev_mm,
