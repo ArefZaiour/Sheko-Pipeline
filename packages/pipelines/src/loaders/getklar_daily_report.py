@@ -28,7 +28,7 @@ import os
 import re
 import sys
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -395,7 +395,81 @@ def _build_attribution_line(r: ReportRow) -> str:
     )
 
 
-def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, Any]:
+def _generate_recommendations(
+    rows: list[ReportRow],
+    history: list[list[ReportRow]] | None = None,
+) -> list[str]:
+    """Generate actionable recommendations based on current data and 3-day trends.
+
+    Args:
+        rows: Today's report rows.
+        history: Optional list of previous days' report rows (most recent first).
+    """
+    recs: list[str] = []
+    history = history or []
+
+    for r in rows:
+        if r.actual_spend == 0:
+            continue
+
+        # --- Spend allocation issues ---
+        if r.delta_pct > 5.0:
+            recs.append(
+                f"📉 **{r.channel}** Budget um {r.delta_pct:.0f}% über Soll — "
+                f"Tagesbudget reduzieren oder Bid Caps setzen"
+            )
+        elif r.delta_pct < -5.0:
+            recs.append(
+                f"📈 **{r.channel}** Budget um {abs(r.delta_pct):.0f}% unter Soll — "
+                f"Tagesbudget erhöhen oder neue Creatives testen"
+            )
+
+        # --- ROAS issues ---
+        if r.target_roas > 0 and r.actual_roas < r.target_roas * 0.7:
+            recs.append(
+                f"🚨 **{r.channel}** ROAS nur {r.actual_roas:.2f}x (Soll {r.target_roas:.2f}x) — "
+                f"Kampagnen-Performance prüfen, ggf. pausieren"
+            )
+        elif r.target_roas > 0 and r.actual_roas > r.target_roas * 1.5:
+            recs.append(
+                f"🚀 **{r.channel}** ROAS {r.actual_roas:.2f}x deutlich über Soll — "
+                f"Budget-Scaling prüfen"
+            )
+
+        # --- CAC issues ---
+        if r.target_cac > 0 and r.actual_cac > r.target_cac * 1.3 and r.actual_orders > 5:
+            recs.append(
+                f"💸 **{r.channel}** CAC {r.actual_cac:.0f}€ vs Soll {r.target_cac:.0f}€ — "
+                f"Targeting und Audiences überprüfen"
+            )
+
+    # --- 3-day trend analysis ---
+    if history:
+        for r in rows:
+            if r.actual_spend == 0:
+                continue
+            # Check if ROAS has been declining over 3 days
+            channel_roas_history = []
+            for day_rows in history:
+                for hr in day_rows:
+                    if hr.channel == r.channel and hr.actual_spend > 0:
+                        channel_roas_history.append(hr.actual_roas)
+            if len(channel_roas_history) >= 2:
+                all_declining = all(
+                    channel_roas_history[i] > channel_roas_history[i + 1]
+                    for i in range(len(channel_roas_history) - 1)
+                ) and r.actual_roas < channel_roas_history[-1]
+                if all_declining and r.target_roas > 0 and r.actual_roas < r.target_roas:
+                    recs.append(
+                        f"📊 **{r.channel}** ROAS fällt seit 3 Tagen — Trend beobachten, "
+                        f"ggf. Creative Refresh oder Audience Shift"
+                    )
+
+    # Cap at 5 recommendations to keep the card concise
+    return recs[:5]
+
+
+def _build_adaptive_card(rows: list[ReportRow], report_date: date, history: list[list[ReportRow]] | None = None) -> dict[str, Any]:
     """Build a mobile-friendly Adaptive Card using single-column TextBlocks."""
     total_spend = sum(r.actual_spend for r in rows)
     total_rev = sum(r.actual_revenue for r in rows)
@@ -497,6 +571,17 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, 
             "spacing": "Medium",
         })
 
+    # Recommendations
+    recs = _generate_recommendations(rows, history)
+    if recs:
+        body.append({
+            "type": "TextBlock",
+            "text": "**💡 Empfohlene Maßnahmen:**\n" + "\n".join(f"- {r}" for r in recs),
+            "wrap": True,
+            "separator": True,
+            "spacing": "Medium",
+        })
+
     # Mentions
     mention_names = ", ".join(f"<at>{m['name']}</at>" for m in TEAMS_MENTIONS)
     body.append({
@@ -526,9 +611,9 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date) -> dict[str, 
     }
 
 
-def send_to_teams(webhook_url: str, rows: list[ReportRow], report_date: date) -> None:
+def send_to_teams(webhook_url: str, rows: list[ReportRow], report_date: date, history: list[list[ReportRow]] | None = None) -> None:
     """POST the report to a Microsoft Teams incoming webhook as a rich Adaptive Card."""
-    card = _build_adaptive_card(rows, report_date)
+    card = _build_adaptive_card(rows, report_date, history=history)
     payload: dict[str, Any] = {
         "type": "message",
         "attachments": [
@@ -572,13 +657,25 @@ def run_pipeline(report_date: date) -> str:
     log.info("pipeline.step", step="build_report")
     rows = build_report(spend_data, targets)
 
+    # 3b. Fetch last 2 prior days for trend context
+    history: list[list[ReportRow]] = []
+    for days_back in range(1, 3):
+        hist_date = report_date - timedelta(days=days_back)
+        try:
+            log.info("pipeline.step", step="fetch_history", date=str(hist_date))
+            hist_spend = client.fetch_spend_by_channel(hist_date)
+            hist_rows = build_report(hist_spend, targets)
+            history.append(hist_rows)
+        except Exception:
+            log.warning("pipeline.history_failed", date=str(hist_date))
+
     # 4. Format
     report_md = format_markdown_table(rows, report_date)
 
     # 5. Deliver
     if teams_webhook:
         log.info("pipeline.step", step="send_teams")
-        send_to_teams(teams_webhook, rows, report_date)
+        send_to_teams(teams_webhook, rows, report_date, history=history)
     else:
         log.info(
             "pipeline.step",
