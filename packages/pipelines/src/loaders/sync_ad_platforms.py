@@ -58,7 +58,12 @@ _UPSERT_SQL = """
 
 
 def _resolve_account_uuid(conn: Any, platform: str, external_id: str) -> str:
-    """Return the ad_accounts.id UUID for (platform, external_id), creating if absent."""
+    """Return the ad_accounts.id UUID for (platform, external_id), creating if absent.
+
+    The DEFAULT_CLIENT_ID env var pins the client for auto-created accounts.
+    If unset, the single existing client is used.  Raises RuntimeError when
+    multiple clients exist and DEFAULT_CLIENT_ID is not configured.
+    """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM ad_accounts WHERE platform = %s AND external_id = %s",
@@ -68,17 +73,34 @@ def _resolve_account_uuid(conn: Any, platform: str, external_id: str) -> str:
         if row:
             return str(row[0])
 
-        # Auto-create the account record when first seen.
+        # Resolve client_id for the new row.
+        default_client_id = os.environ.get("DEFAULT_CLIENT_ID", "").strip() or None
+        if default_client_id:
+            client_id_expr = "%s"
+            client_id_param: tuple[Any, ...] = (default_client_id, platform, external_id, external_id)
+        else:
+            # Verify exactly one client exists before falling back to it.
+            cur.execute("SELECT id FROM clients")
+            client_rows = cur.fetchall()
+            if len(client_rows) == 0:
+                raise RuntimeError(
+                    "No clients in the database. Run migration 002 or set DEFAULT_CLIENT_ID."
+                )
+            if len(client_rows) > 1:
+                raise RuntimeError(
+                    f"Multiple clients found ({len(client_rows)}). "
+                    "Set DEFAULT_CLIENT_ID env var to pin which client owns new ad accounts."
+                )
+            client_id_expr = "%s"
+            client_id_param = (str(client_rows[0][0]), platform, external_id, external_id)
+
         cur.execute(
-            """
+            f"""
             INSERT INTO ad_accounts (client_id, platform, external_id, label)
-            VALUES (
-                (SELECT id FROM clients LIMIT 1),
-                %s, %s, %s
-            )
+            VALUES ({client_id_expr}, %s, %s, %s)
             RETURNING id
-            """,
-            (platform, external_id, external_id),
+            """,  # noqa: S608
+            client_id_param,
         )
         return str(cur.fetchone()[0])  # type: ignore[index]
 
