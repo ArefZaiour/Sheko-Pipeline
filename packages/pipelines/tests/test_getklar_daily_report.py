@@ -2,6 +2,7 @@
 
 All tests use unittest.mock — no real HTTP calls or API credentials required.
 """
+
 from __future__ import annotations
 
 from datetime import date
@@ -27,7 +28,6 @@ from loaders.getklar_daily_report import (
     load_targets_from_sheet,
     send_to_teams,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers / parsing
@@ -59,7 +59,9 @@ def test_parse_euro_plain() -> None:
 
 
 def test_gsheet_csv_url_extracts_id() -> None:
-    url = "https://docs.google.com/spreadsheets/d/1qP38HluiX-en5ezMCbQb5WiAIQ2qYEF_/edit?usp=sharing"
+    url = (
+        "https://docs.google.com/spreadsheets/d/1qP38HluiX-en5ezMCbQb5WiAIQ2qYEF_/edit?usp=sharing"
+    )
     csv_url = _gsheet_csv_url(url)
     assert "1qP38HluiX-en5ezMCbQb5WiAIQ2qYEF_" in csv_url
     assert csv_url.endswith("export?format=csv")
@@ -113,9 +115,7 @@ def test_load_targets_parses_channels(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with patch("loaders.getklar_daily_report.httpx.get", return_value=mock_resp):
-        targets = load_targets_from_sheet(
-            "https://docs.google.com/spreadsheets/d/FAKEID/edit"
-        )
+        targets = load_targets_from_sheet("https://docs.google.com/spreadsheets/d/FAKEID/edit")
 
     assert len(targets) == 2
     assert targets[0].channel == "Meta Ads"
@@ -130,9 +130,7 @@ def test_load_targets_excludes_total(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_resp.raise_for_status = MagicMock()
 
     with patch("loaders.getklar_daily_report.httpx.get", return_value=mock_resp):
-        targets = load_targets_from_sheet(
-            "https://docs.google.com/spreadsheets/d/FAKEID/edit"
-        )
+        targets = load_targets_from_sheet("https://docs.google.com/spreadsheets/d/FAKEID/edit")
 
     channel_names = [t.channel for t in targets]
     assert not any("TOTAL" in c.upper() for c in channel_names)
@@ -141,6 +139,7 @@ def test_load_targets_excludes_total(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 # build_report
 # ---------------------------------------------------------------------------
+
 
 def _ct(channel: str, target_pct: float) -> ChannelTarget:
     """Construct a ChannelTarget with default zero values for benchmark fields."""
@@ -253,7 +252,15 @@ def _rr(**kwargs) -> ReportRow:
 
 
 def test_format_markdown_table_contains_headers() -> None:
-    rows = [_rr(channel="Meta Ads", actual_spend=300.0, actual_pct=60.0, target_pct=28.7, delta_pct=31.3)]
+    rows = [
+        _rr(
+            channel="Meta Ads",
+            actual_spend=300.0,
+            actual_pct=60.0,
+            target_pct=28.7,
+            delta_pct=31.3,
+        )
+    ]
     table = format_markdown_table(rows, date(2026, 3, 30))
     assert "30.03.2026" in table
     assert "Meta Ads" in table
@@ -263,7 +270,15 @@ def test_format_markdown_table_contains_headers() -> None:
 
 
 def test_format_markdown_table_shows_total_row() -> None:
-    rows = [_rr(channel="Meta Ads", actual_spend=300.0, actual_pct=60.0, target_pct=28.7, delta_pct=31.3)]
+    rows = [
+        _rr(
+            channel="Meta Ads",
+            actual_spend=300.0,
+            actual_pct=60.0,
+            target_pct=28.7,
+            delta_pct=31.3,
+        )
+    ]
     table = format_markdown_table(rows, date(2026, 3, 30))
     assert "TOTAL" in table
 
@@ -278,7 +293,15 @@ def test_send_to_teams_posts_json() -> None:
     mock_resp.status_code = 202
     mock_resp.raise_for_status = MagicMock()
 
-    rows = [_rr(channel="Meta Ads", actual_spend=300.0, actual_pct=60.0, target_pct=28.7, delta_pct=31.3)]
+    rows = [
+        _rr(
+            channel="Meta Ads",
+            actual_spend=300.0,
+            actual_pct=60.0,
+            target_pct=28.7,
+            delta_pct=31.3,
+        )
+    ]
     with patch("loaders.getklar_daily_report.httpx.post", return_value=mock_resp) as mock_post:
         send_to_teams("https://webhook.example.com/teams", rows, date(2026, 3, 30))
 
@@ -327,6 +350,7 @@ def test_getklar_client_fetch_spend_by_channel_aggregates() -> None:
     client = GetKlarClient(api_token="fake-api-token")
 
     import time as _time
+
     client._access_token = "cached-token"
     client._access_token_expiry = _time.time() + 3600
 
@@ -361,7 +385,7 @@ def test_getklar_client_fetch_spend_by_channel_aggregates() -> None:
     assert len(result) == 2
     meta = next(r for r in result if r.channel == "Meta Ads")
     assert meta.spend == pytest.approx(150.0)  # 100 + 50
-    assert meta.orders == pytest.approx(7.0)   # 5 + 2
+    assert meta.orders == pytest.approx(7.0)  # 5 + 2
 
     google = next(r for r in result if r.channel == "Google Generic Search")
     assert google.spend == pytest.approx(80.0)
@@ -371,6 +395,7 @@ def test_getklar_client_sorted_by_spend_desc() -> None:
     client = GetKlarClient(api_token="fake-api-token")
 
     import time as _time
+
     client._access_token = "cached-token"
     client._access_token_expiry = _time.time() + 3600
 
@@ -390,5 +415,7 @@ def test_getklar_client_sorted_by_spend_desc() -> None:
 
 
 def test_yesterday_is_one_day_before_today() -> None:
-    from datetime import date as _date, timedelta
+    from datetime import date as _date
+    from datetime import timedelta
+
     assert yesterday() == _date.today() - timedelta(days=1)

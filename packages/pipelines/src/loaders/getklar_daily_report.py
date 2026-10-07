@@ -19,6 +19,7 @@ Scheduling (daily at 9:00 AM CET/CEST):
     0 7 * * * cd /path/to/project && python -m perf_marketing_pipelines.loaders.getklar_daily_report
     (7 UTC = 8/9 CET/CEST depending on DST)
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,7 +36,7 @@ import httpx
 import structlog
 from dotenv import load_dotenv
 
-from integrations.getklar import ChannelSpend, GetKlarClient, build_from_env, yesterday
+from integrations.getklar import ChannelSpend, build_from_env, yesterday
 
 log = structlog.get_logger(__name__)
 
@@ -59,15 +60,15 @@ class ChannelTarget:
     """Target allocation and attribution benchmarks for a single channel."""
 
     channel: str
-    target_pct: float       # e.g. 28.7 for 28.7%
-    target_spend: float     # absolute spend in €
-    net_rev_mm: float       # Net Revenue (Marketing Mix) in €
-    roas_mm: float          # ROAS (Marketing Mix)
-    nc_orders: float        # New Customer orders
-    nc_rev: float           # New Customer revenue in €
-    nc_roas: float          # New Customer ROAS
-    cac: float              # Customer Acquisition Cost in €
-    bewertung: str          # Assessment text
+    target_pct: float  # e.g. 28.7 for 28.7%
+    target_spend: float  # absolute spend in €
+    net_rev_mm: float  # Net Revenue (Marketing Mix) in €
+    roas_mm: float  # ROAS (Marketing Mix)
+    nc_orders: float  # New Customer orders
+    nc_rev: float  # New Customer revenue in €
+    nc_roas: float  # New Customer ROAS
+    cac: float  # Customer Acquisition Cost in €
+    bewertung: str  # Assessment text
 
 
 def _gsheet_csv_url(sheet_url: str) -> str:
@@ -166,22 +167,26 @@ def load_targets_from_sheet(template_url: str) -> list[ChannelTarget]:
         if channel.upper().startswith("TOTAL"):
             break
 
-        def _cell(key: str) -> str:
+        def _cell(key: str, _row: list[str] = row) -> str:
             idx = cols.get(key, -1)
-            return row[idx].strip() if 0 <= idx < len(row) else ""
+            return _row[idx].strip() if 0 <= idx < len(_row) else ""
 
-        targets.append(ChannelTarget(
-            channel=channel,
-            target_pct=_parse_percent(_cell("pct")),
-            target_spend=_parse_euro(_cell("spend")),
-            net_rev_mm=_parse_euro(_cell("net_rev")),
-            roas_mm=_parse_roas(_cell("roas_mm")),
-            nc_orders=_parse_euro(_cell("nc_orders")),  # reuse euro parser for numbers with dots
-            nc_rev=_parse_euro(_cell("nc_rev")),
-            nc_roas=_parse_roas(_cell("nc_roas")),
-            cac=_parse_euro(_cell("cac")),
-            bewertung=_cell("bewertung"),
-        ))
+        targets.append(
+            ChannelTarget(
+                channel=channel,
+                target_pct=_parse_percent(_cell("pct")),
+                target_spend=_parse_euro(_cell("spend")),
+                net_rev_mm=_parse_euro(_cell("net_rev")),
+                roas_mm=_parse_roas(_cell("roas_mm")),
+                nc_orders=_parse_euro(
+                    _cell("nc_orders")
+                ),  # reuse euro parser for numbers with dots
+                nc_rev=_parse_euro(_cell("nc_rev")),
+                nc_roas=_parse_roas(_cell("nc_roas")),
+                cac=_parse_euro(_cell("cac")),
+                bewertung=_cell("bewertung"),
+            )
+        )
 
     log.info("template.loaded", channels=len(targets))
     return targets
@@ -222,9 +227,7 @@ def _normalise_channel(name: str) -> str:
     return n.strip()
 
 
-def _find_channel_spend(
-    spend_data: list[ChannelSpend], channel_name: str
-) -> ChannelSpend | None:
+def _find_channel_spend(spend_data: list[ChannelSpend], channel_name: str) -> ChannelSpend | None:
     """Find a ChannelSpend by exact or normalised name match."""
     exact_key = channel_name.lower().strip()
     norm_key = _normalise_channel(channel_name)
@@ -314,13 +317,15 @@ def format_markdown_table(rows: list[ReportRow], report_date: date) -> str:
         )
     lines.append(f"| **TOTAL** | **{total_spend:,.0f}€** | **100%** | **100%** | — |")
 
-    lines.extend([
-        "",
-        "### Marketing Mix Attribution (Ist vs Soll)",
-        "",
-        "| Channel | Revenue (€) | ROAS Ist | ROAS Soll | Orders | CAC Ist | CAC Soll |",
-        "|---------|------------:|---------:|----------:|-------:|--------:|---------:|",
-    ])
+    lines.extend(
+        [
+            "",
+            "### Marketing Mix Attribution (Ist vs Soll)",
+            "",
+            "| Channel | Revenue (€) | ROAS Ist | ROAS Soll | Orders | CAC Ist | CAC Soll |",
+            "|---------|------------:|---------:|----------:|-------:|--------:|---------:|",
+        ]
+    )
     for r in rows:
         lines.append(
             f"| {r.channel} "
@@ -387,7 +392,8 @@ def _build_channel_line(r: ReportRow) -> str:
     icon = _delta_icon(r.delta_pct)
     return (
         f"**{r.channel}**\n"
-        f"Spend: {r.actual_spend:,.0f}€ · Ist {r.actual_pct:.1f}% · Soll {r.target_pct:.1f}% · {icon} {delta_sign}{r.delta_pct:.1f}%"
+        f"Spend: {r.actual_spend:,.0f}€ · Ist {r.actual_pct:.1f}% · Soll {r.target_pct:.1f}%"
+        f" · {icon} {delta_sign}{r.delta_pct:.1f}%"
     )
 
 
@@ -396,7 +402,8 @@ def _build_attribution_line(r: ReportRow) -> str:
     roas_icon = "✅" if r.target_roas > 0 and r.actual_roas >= r.target_roas else "⚠️"
     return (
         f"**{r.channel}**\n"
-        f"Rev: {r.actual_revenue:,.0f}€ · ROAS: {roas_icon} {r.actual_roas:.2f}x (Soll {r.target_roas:.2f}x) · "
+        f"Rev: {r.actual_revenue:,.0f}€ · ROAS: {roas_icon} {r.actual_roas:.2f}x"
+        f" (Soll {r.target_roas:.2f}x) · "
         f"Orders: {r.actual_orders:,.0f} · CAC: {r.actual_cac:,.0f}€"
     )
 
@@ -461,10 +468,13 @@ def _generate_recommendations(
                     if hr.channel == r.channel and hr.actual_spend > 0:
                         channel_roas_history.append(hr.actual_roas)
             if len(channel_roas_history) >= 2:
-                all_declining = all(
-                    channel_roas_history[i] > channel_roas_history[i + 1]
-                    for i in range(len(channel_roas_history) - 1)
-                ) and r.actual_roas < channel_roas_history[-1]
+                all_declining = (
+                    all(
+                        channel_roas_history[i] > channel_roas_history[i + 1]
+                        for i in range(len(channel_roas_history) - 1)
+                    )
+                    and r.actual_roas < channel_roas_history[-1]
+                )
                 if all_declining and r.target_roas > 0 and r.actual_roas < r.target_roas:
                     recs.append(
                         f"📊 **{r.channel}** ROAS fällt seit 3 Tagen — Trend beobachten, "
@@ -475,7 +485,11 @@ def _generate_recommendations(
     return recs[:5]
 
 
-def _build_adaptive_card(rows: list[ReportRow], report_date: date, history: list[list[ReportRow]] | None = None) -> dict[str, Any]:
+def _build_adaptive_card(
+    rows: list[ReportRow],
+    report_date: date,
+    history: list[list[ReportRow]] | None = None,
+) -> dict[str, Any]:
     """Build a mobile-friendly Adaptive Card using single-column TextBlocks."""
     total_spend = sum(r.actual_spend for r in rows)
     total_rev = sum(r.actual_revenue for r in rows)
@@ -511,49 +525,62 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date, history: list
 
     # Each channel as a compact text block
     for r in rows:
-        body.append({
-            "type": "TextBlock",
-            "text": _build_channel_line(r),
-            "wrap": True,
-            "spacing": "Small",
-            "size": "Small",
-        })
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": _build_channel_line(r),
+                "wrap": True,
+                "spacing": "Small",
+                "size": "Small",
+            }
+        )
 
     # Total line
-    body.append({
-        "type": "TextBlock",
-        "text": f"**TOTAL: {total_spend:,.0f}€**",
-        "weight": "Bolder",
-        "spacing": "Small",
-        "size": "Small",
-    })
-
-    # --- Section 2: Marketing Mix Attribution ---
-    body.append({
-        "type": "TextBlock",
-        "text": "━━━ **Marketing Mix Attribution (Ist vs Soll)** ━━━",
-        "separator": True,
-        "spacing": "Medium",
-        "wrap": True,
-    })
-
-    for r in rows:
-        body.append({
+    body.append(
+        {
             "type": "TextBlock",
-            "text": _build_attribution_line(r),
-            "wrap": True,
+            "text": f"**TOTAL: {total_spend:,.0f}€**",
+            "weight": "Bolder",
             "spacing": "Small",
             "size": "Small",
-        })
+        }
+    )
 
-    body.append({
-        "type": "TextBlock",
-        "text": f"**TOTAL: {total_rev:,.0f}€ Rev · {blended_roas:.2f}x ROAS · {total_orders:,.0f} Orders**",
-        "weight": "Bolder",
-        "spacing": "Small",
-        "size": "Small",
-        "wrap": True,
-    })
+    # --- Section 2: Marketing Mix Attribution ---
+    body.append(
+        {
+            "type": "TextBlock",
+            "text": "━━━ **Marketing Mix Attribution (Ist vs Soll)** ━━━",
+            "separator": True,
+            "spacing": "Medium",
+            "wrap": True,
+        }
+    )
+
+    for r in rows:
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": _build_attribution_line(r),
+                "wrap": True,
+                "spacing": "Small",
+                "size": "Small",
+            }
+        )
+
+    body.append(
+        {
+            "type": "TextBlock",
+            "text": (
+                f"**TOTAL: {total_rev:,.0f}€ Rev · {blended_roas:.2f}x ROAS"
+                f" · {total_orders:,.0f} Orders**"
+            ),
+            "weight": "Bolder",
+            "spacing": "Small",
+            "size": "Small",
+            "wrap": True,
+        }
+    )
 
     # Highlights
     over = sorted([r for r in rows if r.delta_pct > 2.0], key=lambda r: -r.delta_pct)
@@ -566,38 +593,46 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date, history: list
     for r in under[:3]:
         highlights.append(f"🔻 **{r.channel}** Spend unter Soll ({r.delta_pct:.1f}%)")
     for r in low_roas[:3]:
-        highlights.append(f"⚠️ **{r.channel}** ROAS {r.actual_roas:.2f}x vs Soll {r.target_roas:.2f}x")
+        highlights.append(
+            f"⚠️ **{r.channel}** ROAS {r.actual_roas:.2f}x vs Soll {r.target_roas:.2f}x"
+        )
 
     if highlights:
-        body.append({
-            "type": "TextBlock",
-            "text": "**⚡ Auffälligkeiten:**\n" + "\n".join(f"- {h}" for h in highlights),
-            "wrap": True,
-            "separator": True,
-            "spacing": "Medium",
-        })
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": "**⚡ Auffälligkeiten:**\n" + "\n".join(f"- {h}" for h in highlights),
+                "wrap": True,
+                "separator": True,
+                "spacing": "Medium",
+            }
+        )
 
     # Recommendations
     recs = _generate_recommendations(rows, history)
     if recs:
-        body.append({
-            "type": "TextBlock",
-            "text": "**💡 Empfohlene Maßnahmen:**\n" + "\n".join(f"- {r}" for r in recs),
-            "wrap": True,
-            "separator": True,
-            "spacing": "Medium",
-        })
+        body.append(
+            {
+                "type": "TextBlock",
+                "text": "**💡 Empfohlene Maßnahmen:**\n" + "\n".join(f"- {r}" for r in recs),
+                "wrap": True,
+                "separator": True,
+                "spacing": "Medium",
+            }
+        )
 
     # Mentions
     mention_names = ", ".join(f"<at>{m['name']}</at>" for m in TEAMS_MENTIONS)
-    body.append({
-        "type": "TextBlock",
-        "text": f"cc {mention_names}",
-        "spacing": "Medium",
-        "size": "Small",
-        "isSubtle": True,
-        "wrap": True,
-    })
+    body.append(
+        {
+            "type": "TextBlock",
+            "text": f"cc {mention_names}",
+            "spacing": "Medium",
+            "size": "Small",
+            "isSubtle": True,
+            "wrap": True,
+        }
+    )
 
     mentions = [
         {
@@ -617,7 +652,12 @@ def _build_adaptive_card(rows: list[ReportRow], report_date: date, history: list
     }
 
 
-def send_to_teams(webhook_url: str, rows: list[ReportRow], report_date: date, history: list[list[ReportRow]] | None = None) -> None:
+def send_to_teams(
+    webhook_url: str,
+    rows: list[ReportRow],
+    report_date: date,
+    history: list[list[ReportRow]] | None = None,
+) -> None:
     """POST the report to a Microsoft Teams incoming webhook as a rich Adaptive Card."""
     card = _build_adaptive_card(rows, report_date, history=history)
     payload: dict[str, Any] = {
@@ -646,7 +686,7 @@ def run_pipeline(report_date: date) -> str:
     """
     template_url = os.environ.get("GETKLAR_TEMPLATE_URL", "")
     if not template_url:
-        raise EnvironmentError("GETKLAR_TEMPLATE_URL is not set.")
+        raise OSError("GETKLAR_TEMPLATE_URL is not set.")
 
     teams_webhook = os.environ.get("TEAMS_WEBHOOK_URL", "")
 
@@ -718,7 +758,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         report = run_pipeline(report_date)
-    except EnvironmentError as exc:
+    except OSError as exc:
         log.error("pipeline.env_error", error=str(exc))
         print(f"Error: {exc}", file=sys.stderr)
         return 1

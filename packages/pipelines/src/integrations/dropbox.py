@@ -5,6 +5,7 @@ shared-folder URL triggers a zip download of the entire folder.  We extract
 PNGs from the ``normal/`` subfolder (case-insensitive) in-memory and write
 them to the local filesystem.
 """
+
 from __future__ import annotations
 
 import html
@@ -75,7 +76,8 @@ def download_normal_pngs(
         raise
 
     normal_entries = [
-        name for name in zf.namelist()
+        name
+        for name in zf.namelist()
         if name.lower().startswith("normal/") and name.lower().endswith(".png")
     ]
     log.info("dropbox.zip.normal_pngs", count=len(normal_entries))

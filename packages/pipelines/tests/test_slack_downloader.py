@@ -2,6 +2,7 @@
 
 No real Slack or HTTP calls are made — all external I/O is mocked.
 """
+
 from __future__ import annotations
 
 import io
@@ -13,7 +14,6 @@ import pytest
 
 from integrations.dropbox import download_normal_pngs, parse_dropbox_url
 from integrations.slack import SlackNativeAdMonitor, build_from_env
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,12 +72,14 @@ def test_parse_dropbox_url_returns_none_if_no_dropbox() -> None:
 
 def test_download_normal_pngs_extracts_correct_files(tmp_path: Path) -> None:
     fake_png = b"\x89PNG fake"
-    fake_zip = _make_zip({
-        "normal/creative_v1.png": fake_png,
-        "normal/creative_v2.png": fake_png,
-        "1_1/creative_v1.png": b"other",
-        "landscape/creative_v1.png": b"other",
-    })
+    fake_zip = _make_zip(
+        {
+            "normal/creative_v1.png": fake_png,
+            "normal/creative_v2.png": fake_png,
+            "1_1/creative_v1.png": b"other",
+            "landscape/creative_v1.png": b"other",
+        }
+    )
     with patch("integrations.dropbox.httpx.Client") as mock_cls:
         mock_r = MagicMock()
         mock_r.content = fake_zip
@@ -140,26 +142,37 @@ def test_build_from_env_uses_env_channel(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_poll_once_no_messages(tmp_path: Path) -> None:
     monitor = _make_monitor(tmp_path)
-    with patch.object(monitor._client, "conversations_history",
-                      return_value=_mock_slack_resp([])):
+    with patch.object(monitor._client, "conversations_history", return_value=_mock_slack_resp([])):
         assert monitor.poll_once() == []
 
 
 def test_poll_once_ignores_non_native_ms_attachments(tmp_path: Path) -> None:
     monitor = _make_monitor(tmp_path)
-    msgs = [{"ts": "1700000100.000000", "text": "x",
-             "attachments": [{"title": "OTHER_123", "text": ""}]}]
-    with patch.object(monitor._client, "conversations_history",
-                      return_value=_mock_slack_resp(msgs)):
+    msgs = [
+        {
+            "ts": "1700000100.000000",
+            "text": "x",
+            "attachments": [{"title": "OTHER_123", "text": ""}],
+        }
+    ]
+    with patch.object(
+        monitor._client, "conversations_history", return_value=_mock_slack_resp(msgs)
+    ):
         assert monitor.poll_once() == []
 
 
 def test_poll_once_ignores_native_ms_without_dropbox_url(tmp_path: Path) -> None:
     monitor = _make_monitor(tmp_path)
-    msgs = [{"ts": "1700000200.000000", "text": "x",
-             "attachments": [{"title": "NATIVE_MS_999", "text": "no url"}]}]
-    with patch.object(monitor._client, "conversations_history",
-                      return_value=_mock_slack_resp(msgs)):
+    msgs = [
+        {
+            "ts": "1700000200.000000",
+            "text": "x",
+            "attachments": [{"title": "NATIVE_MS_999", "text": "no url"}],
+        }
+    ]
+    with patch.object(
+        monitor._client, "conversations_history", return_value=_mock_slack_resp(msgs)
+    ):
         assert monitor.poll_once() == []
 
 
@@ -169,20 +182,23 @@ def test_poll_once_downloads_pngs_for_native_ms(tmp_path: Path) -> None:
         {
             "ts": "1774945491.445959",
             "text": "New Ad ist ready to test",
-            "attachments": [{
-                "title": "NATIVE_MS_2173_STATIC_TESTVERGLEICH_BINGE_EATING",
-                "text": "<https://www.dropbox.com/scl/fo/abc/def?rlkey=xyz&amp;dl=0|view>",
-            }],
+            "attachments": [
+                {
+                    "title": "NATIVE_MS_2173_STATIC_TESTVERGLEICH_BINGE_EATING",
+                    "text": "<https://www.dropbox.com/scl/fo/abc/def?rlkey=xyz&amp;dl=0|view>",
+                }
+            ],
         }
     ]
-    fake_zip = _make_zip({
-        "normal/NATIVE_MS_2173_V1.png": b"\x89PNG v1",
-        "normal/NATIVE_MS_2173_V2.png": b"\x89PNG v2",
-        "1_1/NATIVE_MS_2173_V1.png": b"other",
-    })
+    fake_zip = _make_zip(
+        {
+            "normal/NATIVE_MS_2173_V1.png": b"\x89PNG v1",
+            "normal/NATIVE_MS_2173_V2.png": b"\x89PNG v2",
+            "1_1/NATIVE_MS_2173_V1.png": b"other",
+        }
+    )
     with (
-        patch.object(monitor._client, "conversations_history",
-                     return_value=_mock_slack_resp(msgs)),
+        patch.object(monitor._client, "conversations_history", return_value=_mock_slack_resp(msgs)),
         patch("integrations.dropbox.httpx.Client") as mock_http_cls,
     ):
         mock_http = MagicMock()
@@ -204,7 +220,8 @@ def test_poll_once_advances_cursor(tmp_path: Path) -> None:
         {"ts": ts2, "text": "x", "attachments": [{"title": "NATIVE_MS_A", "text": "no url"}]},
         {"ts": ts1, "text": "x", "attachments": [{"title": "NATIVE_MS_B", "text": "no url"}]},
     ]
-    with patch.object(monitor._client, "conversations_history",
-                      return_value=_mock_slack_resp(msgs)):
+    with patch.object(
+        monitor._client, "conversations_history", return_value=_mock_slack_resp(msgs)
+    ):
         monitor.poll_once()
     assert monitor._cursor_ts == ts2

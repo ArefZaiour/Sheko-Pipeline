@@ -8,6 +8,7 @@ Required env vars:
     OUTBRAIN_ACCOUNT_ID               Outbrain marketer account ID
     OUTBRAIN_TEMPLATE_CAMPAIGN_ID     ID of the campaign to clone
 """
+
 from __future__ import annotations
 
 import os
@@ -55,9 +56,9 @@ class OutbrainClient:
 
     def __init__(self, api_key: str, account_id: str, timeout: int = 60) -> None:
         if not api_key:
-            raise EnvironmentError("OUTBRAIN_API_KEY is required.")
+            raise OSError("OUTBRAIN_API_KEY is required.")
         if not account_id:
-            raise EnvironmentError("OUTBRAIN_ACCOUNT_ID is required.")
+            raise OSError("OUTBRAIN_ACCOUNT_ID is required.")
         self._headers = {"OB-TOKEN-V1": api_key, "Content-Type": "application/json"}
         self._account_id = account_id
         self._timeout = timeout
@@ -212,9 +213,7 @@ class OutbrainClient:
         if not targeting:
             warnings.append(f"Campaign {campaign.id!r}: no targeting configuration set.")
         if campaign.status not in ("ACTIVE", "PENDING"):
-            warnings.append(
-                f"Campaign {campaign.id!r}: unexpected status {campaign.status!r}."
-            )
+            warnings.append(f"Campaign {campaign.id!r}: unexpected status {campaign.status!r}.")
         return warnings
 
     # ------------------------------------------------------------------
@@ -243,7 +242,7 @@ def build_from_env() -> OutbrainClient:
     api_key = os.environ.get("OUTBRAIN_API_KEY", "")
     account_id = os.environ.get("OUTBRAIN_ACCOUNT_ID", "")
     if not api_key:
-        raise EnvironmentError("OUTBRAIN_API_KEY environment variable is not set.")
+        raise OSError("OUTBRAIN_API_KEY environment variable is not set.")
     if not account_id:
-        raise EnvironmentError("OUTBRAIN_ACCOUNT_ID environment variable is not set.")
+        raise OSError("OUTBRAIN_ACCOUNT_ID environment variable is not set.")
     return OutbrainClient(api_key=api_key, account_id=account_id)

@@ -1,17 +1,16 @@
 """Tests for campaign metrics transforms and derived-metric calculations."""
+
 from __future__ import annotations
 
 import pytest
 
 from transforms.metrics import (
     CampaignMetrics,
-    PacingStatus,
     aggregate_by_campaign,
     calculate_pacing,
     normalize_google_ads_row,
     normalize_meta_row,
 )
-
 
 # ---------------------------------------------------------------------------
 # CampaignMetrics.compute_derived
@@ -20,9 +19,16 @@ from transforms.metrics import (
 
 def test_compute_derived_calculates_ctr() -> None:
     m = CampaignMetrics(
-        date="2026-10-06", platform="google_ads", account_id="acc",
-        campaign_id="1", campaign_name="C",
-        impressions=10000, clicks=200, spend_usd=100.0, conversions=10, revenue_usd=500.0,
+        date="2026-10-06",
+        platform="google_ads",
+        account_id="acc",
+        campaign_id="1",
+        campaign_name="C",
+        impressions=10000,
+        clicks=200,
+        spend_usd=100.0,
+        conversions=10,
+        revenue_usd=500.0,
     )
     m.compute_derived()
     assert m.ctr == pytest.approx(0.02)
@@ -30,9 +36,16 @@ def test_compute_derived_calculates_ctr() -> None:
 
 def test_compute_derived_calculates_cpc() -> None:
     m = CampaignMetrics(
-        date="2026-10-06", platform="meta", account_id="acc",
-        campaign_id="1", campaign_name="C",
-        impressions=5000, clicks=100, spend_usd=50.0, conversions=5, revenue_usd=200.0,
+        date="2026-10-06",
+        platform="meta",
+        account_id="acc",
+        campaign_id="1",
+        campaign_name="C",
+        impressions=5000,
+        clicks=100,
+        spend_usd=50.0,
+        conversions=5,
+        revenue_usd=200.0,
     )
     m.compute_derived()
     assert m.cpc_usd == pytest.approx(0.50)
@@ -40,9 +53,16 @@ def test_compute_derived_calculates_cpc() -> None:
 
 def test_compute_derived_calculates_cpm() -> None:
     m = CampaignMetrics(
-        date="2026-10-06", platform="meta", account_id="acc",
-        campaign_id="1", campaign_name="C",
-        impressions=10000, clicks=100, spend_usd=20.0, conversions=2, revenue_usd=100.0,
+        date="2026-10-06",
+        platform="meta",
+        account_id="acc",
+        campaign_id="1",
+        campaign_name="C",
+        impressions=10000,
+        clicks=100,
+        spend_usd=20.0,
+        conversions=2,
+        revenue_usd=100.0,
     )
     m.compute_derived()
     assert m.cpm_usd == pytest.approx(2.0)
@@ -50,9 +70,16 @@ def test_compute_derived_calculates_cpm() -> None:
 
 def test_compute_derived_calculates_roas() -> None:
     m = CampaignMetrics(
-        date="2026-10-06", platform="google_ads", account_id="acc",
-        campaign_id="1", campaign_name="C",
-        impressions=1000, clicks=50, spend_usd=100.0, conversions=5, revenue_usd=350.0,
+        date="2026-10-06",
+        platform="google_ads",
+        account_id="acc",
+        campaign_id="1",
+        campaign_name="C",
+        impressions=1000,
+        clicks=50,
+        spend_usd=100.0,
+        conversions=5,
+        revenue_usd=350.0,
     )
     m.compute_derived()
     assert m.roas == pytest.approx(3.5)
@@ -60,9 +87,16 @@ def test_compute_derived_calculates_roas() -> None:
 
 def test_compute_derived_calculates_cpa() -> None:
     m = CampaignMetrics(
-        date="2026-10-06", platform="meta", account_id="acc",
-        campaign_id="1", campaign_name="C",
-        impressions=5000, clicks=200, spend_usd=80.0, conversions=4, revenue_usd=240.0,
+        date="2026-10-06",
+        platform="meta",
+        account_id="acc",
+        campaign_id="1",
+        campaign_name="C",
+        impressions=5000,
+        clicks=200,
+        spend_usd=80.0,
+        conversions=4,
+        revenue_usd=240.0,
     )
     m.compute_derived()
     assert m.cpa_usd == pytest.approx(20.0)
@@ -70,9 +104,16 @@ def test_compute_derived_calculates_cpa() -> None:
 
 def test_compute_derived_zero_impressions_safe() -> None:
     m = CampaignMetrics(
-        date="2026-10-06", platform="meta", account_id="acc",
-        campaign_id="1", campaign_name="C",
-        impressions=0, clicks=0, spend_usd=0.0, conversions=0, revenue_usd=0.0,
+        date="2026-10-06",
+        platform="meta",
+        account_id="acc",
+        campaign_id="1",
+        campaign_name="C",
+        impressions=0,
+        clicks=0,
+        spend_usd=0.0,
+        conversions=0,
+        revenue_usd=0.0,
     )
     m.compute_derived()
     assert m.ctr == 0.0
@@ -141,10 +182,15 @@ def test_normalize_meta_row_maps_fields() -> None:
 
 def test_normalize_meta_row_uses_date_start_fallback() -> None:
     row = {
-        "campaign_id": "m2", "campaign_name": "C",
-        "date_start": "2026-10-05", "date_stop": None,
-        "impressions": 0, "clicks": 0, "spend_usd": 0.0,
-        "conversions": 0, "revenue_usd": 0.0,
+        "campaign_id": "m2",
+        "campaign_name": "C",
+        "date_start": "2026-10-05",
+        "date_stop": None,
+        "impressions": 0,
+        "clicks": 0,
+        "spend_usd": 0.0,
+        "conversions": 0,
+        "revenue_usd": 0.0,
     }
     m = normalize_meta_row(row, account_uuid="uuid")
     assert m.date == "2026-10-05"
@@ -156,14 +202,26 @@ def test_normalize_meta_row_uses_date_start_fallback() -> None:
 
 
 def _make_metric(
-    platform: str, campaign_id: str, date: str,
-    impressions: int, clicks: int, spend: float, conv: int, rev: float,
+    platform: str,
+    campaign_id: str,
+    date: str,
+    impressions: int,
+    clicks: int,
+    spend: float,
+    conv: int,
+    rev: float,
 ) -> CampaignMetrics:
     return CampaignMetrics(
-        date=date, platform=platform, account_id="acc",
-        campaign_id=campaign_id, campaign_name=f"Camp {campaign_id}",
-        impressions=impressions, clicks=clicks, spend_usd=spend,
-        conversions=conv, revenue_usd=rev,
+        date=date,
+        platform=platform,
+        account_id="acc",
+        campaign_id=campaign_id,
+        campaign_name=f"Camp {campaign_id}",
+        impressions=impressions,
+        clicks=clicks,
+        spend_usd=spend,
+        conversions=conv,
+        revenue_usd=rev,
     ).compute_derived()
 
 
@@ -209,9 +267,9 @@ def test_aggregate_recomputes_derived() -> None:
     result = aggregate_by_campaign(metrics)
     agg = result[0]
     # Aggregated: 2000 impressions, 100 clicks, 50 spend, 200 revenue
-    assert agg.ctr == pytest.approx(0.05)   # 100 / 2000
+    assert agg.ctr == pytest.approx(0.05)  # 100 / 2000
     assert agg.cpc_usd == pytest.approx(0.50)  # 50 / 100
-    assert agg.roas == pytest.approx(4.0)    # 200 / 50
+    assert agg.roas == pytest.approx(4.0)  # 200 / 50
 
 
 def test_aggregate_empty_list() -> None:

@@ -10,11 +10,12 @@ Required env vars:
     TABOOLA_ACCOUNT_ID      Taboola advertiser account ID / name
     TABOOLA_TEMPLATE_CAMPAIGN_ID  ID of the campaign to clone
 """
+
 from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -67,11 +68,11 @@ class TaboolaClient:
         timeout: int = 60,
     ) -> None:
         if not client_id:
-            raise EnvironmentError("TABOOLA_CLIENT_ID is required.")
+            raise OSError("TABOOLA_CLIENT_ID is required.")
         if not client_secret:
-            raise EnvironmentError("TABOOLA_CLIENT_SECRET is required.")
+            raise OSError("TABOOLA_CLIENT_SECRET is required.")
         if not account_id:
-            raise EnvironmentError("TABOOLA_ACCOUNT_ID is required.")
+            raise OSError("TABOOLA_ACCOUNT_ID is required.")
         self._client_id = client_id
         self._client_secret = client_secret
         self._account_id = account_id
@@ -255,9 +256,7 @@ class TaboolaClient:
         if campaign.budget <= 0 and (campaign.daily_budget is None or campaign.daily_budget <= 0):
             warnings.append(f"Campaign {campaign.id!r}: budget is 0 or missing.")
         if campaign.status not in ("RUNNING", "PENDING", "PAUSED"):
-            warnings.append(
-                f"Campaign {campaign.id!r}: unexpected status {campaign.status!r}."
-            )
+            warnings.append(f"Campaign {campaign.id!r}: unexpected status {campaign.status!r}.")
         return warnings
 
     # ------------------------------------------------------------------
@@ -298,9 +297,7 @@ def build_from_env() -> TaboolaClient:
         if not val
     ]
     if missing:
-        raise EnvironmentError(
-            f"Missing required Taboola env vars: {', '.join(missing)}"
-        )
+        raise OSError(f"Missing required Taboola env vars: {', '.join(missing)}")
     return TaboolaClient(
         client_id=client_id,
         client_secret=client_secret,

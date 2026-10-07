@@ -14,6 +14,7 @@ Exit codes:
     0  All attempted platforms succeeded (warnings are non-fatal).
     1  At least one platform failed.
 """
+
 from __future__ import annotations
 
 import argparse

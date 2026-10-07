@@ -13,6 +13,7 @@ rows by channelName to produce per-channel totals.
 Required env vars:
     GETKLAR_API_TOKEN   Long-lived JWT from Klar Frontend (already in .env).
 """
+
 from __future__ import annotations
 
 import os
@@ -40,7 +41,7 @@ class ChannelSpend:
     """Aggregated spend and attribution data for a single marketing channel."""
 
     channel: str
-    spend: float      # Total ad spend in € (sum of 'cost' across all ads in channel)
+    spend: float  # Total ad spend in € (sum of 'cost' across all ads in channel)
     orders: float
     revenue: float
     raw_rows: list[dict[str, Any]] = field(default_factory=list)
@@ -56,9 +57,7 @@ class GetKlarClient:
 
     def __init__(self, api_token: str, timeout: int = 60) -> None:
         if not api_token:
-            raise EnvironmentError(
-                "GETKLAR_API_TOKEN is required for the GetKlar Attribution API."
-            )
+            raise OSError("GETKLAR_API_TOKEN is required for the GetKlar Attribution API.")
         self._api_token = api_token.strip()
         self._timeout = timeout
         self._access_token: str | None = None
@@ -209,9 +208,7 @@ def build_from_env() -> GetKlarClient:
     """
     api_token = os.environ.get("GETKLAR_API_TOKEN", "")
     if not api_token:
-        raise EnvironmentError(
-            "GETKLAR_API_TOKEN environment variable is not set."
-        )
+        raise OSError("GETKLAR_API_TOKEN environment variable is not set.")
     return GetKlarClient(api_token=api_token)
 
 

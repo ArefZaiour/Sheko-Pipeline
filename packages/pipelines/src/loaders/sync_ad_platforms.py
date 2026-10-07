@@ -21,6 +21,7 @@ Required env vars:
         '[{"platform":"google_ads","external_id":"123-456-7890"},
           {"platform":"meta","external_id":"act_987654321"}]'
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,8 +34,10 @@ from typing import Any
 import psycopg
 import structlog
 
-from integrations.google_ads import GoogleAdsClient, build_from_env as build_google_ads
-from integrations.meta import MetaAdsClient, build_from_env as build_meta
+from integrations.google_ads import GoogleAdsClient
+from integrations.google_ads import build_from_env as build_google_ads
+from integrations.meta import MetaAdsClient
+from integrations.meta import build_from_env as build_meta
 
 log = structlog.get_logger(__name__)
 
@@ -77,7 +80,12 @@ def _resolve_account_uuid(conn: Any, platform: str, external_id: str) -> str:
         default_client_id = os.environ.get("DEFAULT_CLIENT_ID", "").strip() or None
         if default_client_id:
             client_id_expr = "%s"
-            client_id_param: tuple[Any, ...] = (default_client_id, platform, external_id, external_id)
+            client_id_param: tuple[Any, ...] = (
+                default_client_id,
+                platform,
+                external_id,
+                external_id,
+            )
         else:
             # Verify exactly one client exists before falling back to it.
             cur.execute("SELECT id FROM clients")
@@ -183,13 +191,13 @@ async def run_sync(
     if "google_ads" in platforms:
         try:
             google_client = build_google_ads()
-        except EnvironmentError as exc:
+        except OSError as exc:
             log.warning("sync.google_ads.skipped", reason=str(exc))
 
     if "meta" in platforms:
         try:
             meta_client = build_meta()
-        except EnvironmentError as exc:
+        except OSError as exc:
             log.warning("sync.meta.skipped", reason=str(exc))
 
     totals: dict[str, int] = {"google_ads": 0, "meta": 0}
@@ -243,13 +251,13 @@ def main() -> None:
 
     database_url = os.environ.get("DATABASE_URL", "")
     if not database_url:
-        raise EnvironmentError("DATABASE_URL environment variable is not set.")
+        raise OSError("DATABASE_URL environment variable is not set.")
 
     accounts_json = os.environ.get("SYNC_ACCOUNTS", "[]")
     try:
         accounts: list[dict[str, str]] = json.loads(accounts_json)
     except json.JSONDecodeError as exc:
-        raise EnvironmentError(f"SYNC_ACCOUNTS is not valid JSON: {exc}") from exc
+        raise OSError(f"SYNC_ACCOUNTS is not valid JSON: {exc}") from exc
 
     if not accounts:
         log.warning("sync.no_accounts", hint="Set SYNC_ACCOUNTS env var with account list.")
@@ -264,8 +272,7 @@ def main() -> None:
         end=args.end.isoformat(),
     )
     print(
-        f"Sync complete — Google Ads: {totals['google_ads']} rows, "
-        f"Meta: {totals['meta']} rows"
+        f"Sync complete — Google Ads: {totals['google_ads']} rows, " f"Meta: {totals['meta']} rows"
     )
 
 

@@ -22,11 +22,12 @@ Required env vars:
 Optional env vars:
     SLACK_CHANNEL_ID   — Channel to monitor (default: C09FCDHFGCU / ext-sheko).
 """
+
 from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -127,9 +128,7 @@ class SlackNativeAdMonitor:
         applied in Python on ``resp.data["messages"]``.
         """
         try:
-            resp = self._client.conversations_history(
-                channel=self.channel_id, limit=200
-            )
+            resp = self._client.conversations_history(channel=self.channel_id, limit=200)
         except SlackApiError as exc:
             log.error("slack.conversations_history.error", error=str(exc))
             raise
@@ -149,8 +148,7 @@ class SlackNativeAdMonitor:
     @staticmethod
     def _has_native_ms_attachment(msg: dict[str, Any]) -> bool:
         return any(
-            att.get("title", "").startswith("NATIVE_MS")
-            for att in msg.get("attachments") or []
+            att.get("title", "").startswith("NATIVE_MS") for att in msg.get("attachments") or []
         )
 
     def _process_message(self, msg: dict[str, Any]) -> list[Path]:
@@ -160,7 +158,7 @@ class SlackNativeAdMonitor:
             ts_float = float(msg_ts)
         except (ValueError, TypeError):
             ts_float = time.time()
-        date_str = datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.fromtimestamp(ts_float, tz=UTC).strftime("%Y-%m-%d")
 
         result: list[Path] = []
         for att in msg.get("attachments") or []:
@@ -205,7 +203,7 @@ def build_from_env(
     """
     token = os.environ.get("SLACK_BOT_TOKEN", "")
     if not token:
-        raise EnvironmentError(
+        raise OSError(
             "SLACK_BOT_TOKEN is not set. "
             "Create a Slack app with channels:history scope and set the bot token."
         )

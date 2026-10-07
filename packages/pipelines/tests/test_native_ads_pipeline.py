@@ -2,6 +2,7 @@
 
 All tests use unittest.mock — no live credentials, Slack, or ad platform calls.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -11,7 +12,6 @@ import pytest
 
 from loaders.native_ads_pipeline import PackageResult, _print_summary, run_pipeline
 from native_ads.uploader import UploadResult
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -45,7 +45,9 @@ def test_run_pipeline_raises_without_landing_url(monkeypatch: pytest.MonkeyPatch
 # ---------------------------------------------------------------------------
 
 
-def test_run_pipeline_no_packages_returns_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_pipeline_no_packages_returns_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
     mock_monitor = MagicMock()
     mock_monitor.poll_once.return_value = []
@@ -77,7 +79,9 @@ def test_run_pipeline_dry_run_skips_upload(monkeypatch: pytest.MonkeyPatch, tmp_
         patch("loaders.native_ads_pipeline.build_slack_monitor", return_value=mock_monitor),
         patch("loaders.native_ads_pipeline.run_upload") as mock_upload,
     ):
-        results = run_pipeline(landing_url="https://example.com", download_dir=tmp_path, dry_run=True)
+        results = run_pipeline(
+            landing_url="https://example.com", download_dir=tmp_path, dry_run=True
+        )
 
     assert len(results) == 1
     assert results[0].package_name == "NATIVE_MS_TEST_001"
@@ -129,7 +133,9 @@ def test_run_pipeline_uploads_on_success(monkeypatch: pytest.MonkeyPatch, tmp_pa
 # ---------------------------------------------------------------------------
 
 
-def test_run_pipeline_groups_images_by_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_pipeline_groups_images_by_folder(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
     dir_a = tmp_path / "NATIVE_MS_PKG_A"
@@ -161,7 +167,9 @@ def test_run_pipeline_groups_images_by_folder(monkeypatch: pytest.MonkeyPatch, t
 # ---------------------------------------------------------------------------
 
 
-def test_run_pipeline_outbrain_only_skips_taboola(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_pipeline_outbrain_only_skips_taboola(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
     pkg_dir = tmp_path / "NATIVE_MS_TEST_OB"
@@ -184,7 +192,9 @@ def test_run_pipeline_outbrain_only_skips_taboola(monkeypatch: pytest.MonkeyPatc
     assert call_kwargs["skip_taboola"] is True
 
 
-def test_run_pipeline_taboola_only_skips_outbrain(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_run_pipeline_taboola_only_skips_outbrain(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
 
     pkg_dir = tmp_path / "NATIVE_MS_TEST_TB"

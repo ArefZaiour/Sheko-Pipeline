@@ -8,13 +8,13 @@ High-level flow for each platform:
 Both platforms are optional — set ``skip_outbrain`` or ``skip_taboola`` to
 bypass one while developing/testing.
 """
+
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Any
 
 import structlog
 
@@ -37,9 +37,7 @@ class UploadResult:
 
 def _collect_images(folder: Path) -> list[Path]:
     """Return all PNG/JPEG files in ``folder``, sorted by name."""
-    images = sorted(
-        p for p in folder.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}
-    )
+    images = sorted(p for p in folder.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"})
     if not images:
         raise FileNotFoundError(f"No PNG/JPEG images found in {folder}")
     log.info("uploader.images.found", folder=str(folder), count=len(images))

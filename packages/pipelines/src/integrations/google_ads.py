@@ -15,6 +15,7 @@ Required env vars:
     GOOGLE_ADS_CLIENT_SECRET
     GOOGLE_ADS_REFRESH_TOKEN
 """
+
 from __future__ import annotations
 
 import os
@@ -84,9 +85,9 @@ class GoogleAdsClient(AdPlatformClient):
         login_customer_id: str | None = None,
     ) -> None:
         if not developer_token:
-            raise EnvironmentError("GOOGLE_ADS_DEVELOPER_TOKEN is required.")
+            raise OSError("GOOGLE_ADS_DEVELOPER_TOKEN is required.")
         if not client_id or not client_secret or not refresh_token:
-            raise EnvironmentError(
+            raise OSError(
                 "GOOGLE_ADS_CLIENT_ID, GOOGLE_ADS_CLIENT_SECRET, and "
                 "GOOGLE_ADS_REFRESH_TOKEN are all required."
             )

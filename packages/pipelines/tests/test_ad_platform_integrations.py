@@ -2,21 +2,24 @@
 
 All tests use unittest.mock — no real HTTP calls or API credentials required.
 """
+
 from __future__ import annotations
 
 from datetime import date
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from integrations.google_ads import GoogleAdsClient, build_from_env as build_google_ads
+from integrations.google_ads import GoogleAdsClient
+from integrations.google_ads import build_from_env as build_google_ads
 from integrations.meta import (
     MetaAdsClient,
     _extract_purchase_metric,
+)
+from integrations.meta import (
     build_from_env as build_meta,
 )
-
 
 # ---------------------------------------------------------------------------
 # GoogleAdsClient — construction
@@ -369,7 +372,6 @@ async def test_meta_fetch_budget_pacing(meta_client: MetaAdsClient) -> None:
         "paging": {},
     }
 
-    responses: dict[str, Any] = {}
     call_count = 0
 
     def fake_get(url: str, **kwargs: Any) -> MagicMock:

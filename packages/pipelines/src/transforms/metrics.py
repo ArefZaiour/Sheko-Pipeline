@@ -4,6 +4,7 @@ Converts raw ad-platform dicts into normalised CampaignMetrics records
 and computes derived KPIs (CTR, CPC, CPM, ROAS, CPA) used by reports
 and the dashboard API.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -15,9 +16,9 @@ from typing import Any
 class CampaignMetrics:
     """Normalised campaign performance row (matches the Postgres schema + derived KPIs)."""
 
-    date: str            # ISO 8601 date string
-    platform: str        # "google_ads" | "meta"
-    account_id: str      # UUID of the ad_accounts row
+    date: str  # ISO 8601 date string
+    platform: str  # "google_ads" | "meta"
+    account_id: str  # UUID of the ad_accounts row
     campaign_id: str
     campaign_name: str
     impressions: int
@@ -27,13 +28,13 @@ class CampaignMetrics:
     revenue_usd: float
 
     # Derived — populated by compute_derived()
-    ctr: float = 0.0          # clicks / impressions  (0–1)
-    cpc_usd: float = 0.0      # spend / clicks
-    cpm_usd: float = 0.0      # spend / (impressions / 1000)
-    roas: float = 0.0         # revenue / spend
-    cpa_usd: float = 0.0      # spend / conversions
+    ctr: float = 0.0  # clicks / impressions  (0–1)
+    cpc_usd: float = 0.0  # spend / clicks
+    cpm_usd: float = 0.0  # spend / (impressions / 1000)
+    roas: float = 0.0  # revenue / spend
+    cpa_usd: float = 0.0  # spend / conversions
 
-    def compute_derived(self) -> "CampaignMetrics":
+    def compute_derived(self) -> CampaignMetrics:
         """Compute and set all derived KPIs in-place; returns self."""
         self.ctr = self.clicks / self.impressions if self.impressions else 0.0
         self.cpc_usd = self.spend_usd / self.clicks if self.clicks else 0.0
@@ -51,11 +52,11 @@ class PacingStatus:
     account_id: str
     campaign_id: str
     campaign_name: str
-    budget_usd: float           # Daily budget
+    budget_usd: float  # Daily budget
     spend_today_usd: float
-    day_elapsed_pct: float      # 0–100 fraction of the day elapsed
-    pacing_pct: float           # spend_today / (budget * day_elapsed_pct) * 100
-    status: str                 # "on_pace" | "underpacing" | "overpacing" | "no_budget"
+    day_elapsed_pct: float  # 0–100 fraction of the day elapsed
+    pacing_pct: float  # spend_today / (budget * day_elapsed_pct) * 100
+    status: str  # "on_pace" | "underpacing" | "overpacing" | "no_budget"
 
     _UNDER_THRESHOLD: float = field(default=80.0, init=False, repr=False)
     _OVER_THRESHOLD: float = field(default=120.0, init=False, repr=False)

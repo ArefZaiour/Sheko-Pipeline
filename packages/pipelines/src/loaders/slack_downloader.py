@@ -11,6 +11,7 @@ Environment variables:
     SLACK_CHANNEL_ID  (optional) Channel to monitor; defaults to ext-sheko
     DOWNLOAD_DIR      (optional) Root download directory; defaults to downloads/slack
 """
+
 from __future__ import annotations
 
 import argparse
@@ -70,7 +71,7 @@ def main(argv: list[str] | None = None) -> int:
             download_dir=args.download_dir,
             oldest_ts=args.oldest_ts,
         )
-    except EnvironmentError as exc:
+    except OSError as exc:
         log.error("startup.error", error=str(exc))
         print(f"Error: {exc}", file=sys.stderr)
         return 1

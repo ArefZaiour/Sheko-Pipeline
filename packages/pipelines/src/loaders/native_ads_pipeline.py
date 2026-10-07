@@ -23,6 +23,7 @@ Environment variables:
     PIPELINE_DOWNLOAD_DIR      — Local root for downloaded files (default: downloads/slack)
     PIPELINE_OLDEST_TS         — Only process messages newer than this Unix timestamp
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,7 +78,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=None,
         metavar="DIR",
-        help="Root directory for downloaded images (default: PIPELINE_DOWNLOAD_DIR env or downloads/slack).",
+        help=(
+            "Root directory for downloaded images"
+            " (default: PIPELINE_DOWNLOAD_DIR env or downloads/slack)."
+        ),
     )
     p.add_argument(
         "--oldest-ts",
@@ -117,7 +121,7 @@ def run_pipeline(
     if landing_url is None:
         landing_url = os.environ.get("NATIVE_ADS_LANDING_URL", "")
     if not landing_url and not dry_run:
-        raise EnvironmentError(
+        raise OSError(
             "NATIVE_ADS_LANDING_URL is not set. "
             "Provide it as an env var or pass landing_url= to run_pipeline()."
         )
@@ -200,7 +204,10 @@ def _print_summary(results: list[PackageResult]) -> None:
         print(f"    Images downloaded: {pkg.images_downloaded}")
         for r in pkg.upload_results:
             plat_ok = "OK" if r.success else "FAILED"
-            print(f"    {r.platform:10} [{plat_ok}]  campaign={r.campaign_id}  creatives={r.creatives_uploaded}")
+            print(
+                f"    {r.platform:10} [{plat_ok}]  campaign={r.campaign_id}"
+                f"  creatives={r.creatives_uploaded}"
+            )
             for err in r.errors:
                 print(f"      ERROR: {err}")
             for w in r.warnings:
@@ -219,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
             oldest_ts=args.oldest_ts,
             dry_run=args.dry_run,
         )
-    except EnvironmentError as exc:
+    except OSError as exc:
         log.error("pipeline.startup_error", error=str(exc))
         print(f"Error: {exc}", file=sys.stderr)
         return 1

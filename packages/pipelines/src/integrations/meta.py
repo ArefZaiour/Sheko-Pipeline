@@ -13,6 +13,7 @@ The Ad Account ID is passed per-call (format: `act_<numeric_id>`).
 Rate limiting: Meta enforces a sliding-window BUC (Business Use Case) rate limit.
 We use tenacity with exponential backoff and respect x-business-use-case-usage headers.
 """
+
 from __future__ import annotations
 
 import os
@@ -67,7 +68,7 @@ class MetaAdsClient(AdPlatformClient):
 
     def __init__(self, access_token: str, timeout: int = 60) -> None:
         if not access_token:
-            raise EnvironmentError("META_ACCESS_TOKEN is required.")
+            raise OSError("META_ACCESS_TOKEN is required.")
         self._access_token = access_token.strip()
         self._timeout = timeout
 
@@ -128,7 +129,9 @@ class MetaAdsClient(AdPlatformClient):
         params: dict[str, Any] = {
             "fields": _INSIGHTS_FIELDS,
             "level": "campaign",
-            "time_range": f'{{"since":"{start_date.isoformat()}","until":"{end_date.isoformat()}"}}',
+            "time_range": (
+                f'{{"since":"{start_date.isoformat()}",' f'"until":"{end_date.isoformat()}"}}'
+            ),
             "time_increment": 1,  # one row per campaign per day
             "limit": 500,
         }
@@ -215,5 +218,5 @@ def build_from_env() -> MetaAdsClient:
     """Construct a :class:`MetaAdsClient` from environment variables."""
     access_token = os.environ.get("META_ACCESS_TOKEN", "")
     if not access_token:
-        raise EnvironmentError("META_ACCESS_TOKEN environment variable is not set.")
+        raise OSError("META_ACCESS_TOKEN environment variable is not set.")
     return MetaAdsClient(access_token=access_token)
