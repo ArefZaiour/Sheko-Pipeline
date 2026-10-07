@@ -17,6 +17,7 @@ dependencies = [
     "tenacity>=8.0",
     "python-dotenv>=1.0",
     "structlog>=24.0",
+    "slack-sdk>=3.27",
 ]
 
 [project.optional-dependencies]
