@@ -142,11 +142,27 @@ def test_load_targets_excludes_total(monkeypatch: pytest.MonkeyPatch) -> None:
 # build_report
 # ---------------------------------------------------------------------------
 
+def _ct(channel: str, target_pct: float) -> ChannelTarget:
+    """Construct a ChannelTarget with default zero values for benchmark fields."""
+    return ChannelTarget(
+        channel=channel,
+        target_pct=target_pct,
+        target_spend=0.0,
+        net_rev_mm=0.0,
+        roas_mm=0.0,
+        nc_orders=0.0,
+        nc_rev=0.0,
+        nc_roas=0.0,
+        cac=0.0,
+        bewertung="",
+    )
+
+
 _TARGETS = [
-    ChannelTarget(channel="Meta Ads", target_pct=28.7),
-    ChannelTarget(channel="Demand Gen", target_pct=10.2),
-    ChannelTarget(channel="Bing Generic Search", target_pct=2.2),
-    ChannelTarget(channel="Email (Tool Cost)", target_pct=0.1),
+    _ct("Meta Ads", 28.7),
+    _ct("Demand Gen", 10.2),
+    _ct("Bing Generic Search", 2.2),
+    _ct("Email (Tool Cost)", 0.1),
 ]
 
 
@@ -170,7 +186,7 @@ def test_build_report_fuzzy_matches_demand_gen() -> None:
     spend_data = [
         ChannelSpend(channel="Google Demand Gen", spend=200.0, orders=10, revenue=300.0),
     ]
-    rows = build_report(spend_data, [ChannelTarget(channel="Demand Gen", target_pct=10.2)])
+    rows = build_report(spend_data, [_ct("Demand Gen", 10.2)])
     assert rows[0].actual_spend == pytest.approx(200.0)
 
 
@@ -178,7 +194,7 @@ def test_build_report_fuzzy_matches_bing_paid_search() -> None:
     spend_data = [
         ChannelSpend(channel="Bing Generic Paid Search", spend=50.0, orders=5, revenue=80.0),
     ]
-    rows = build_report(spend_data, [ChannelTarget(channel="Bing Generic Search", target_pct=2.2)])
+    rows = build_report(spend_data, [_ct("Bing Generic Search", 2.2)])
     assert rows[0].actual_spend == pytest.approx(50.0)
 
 
@@ -186,7 +202,7 @@ def test_build_report_fuzzy_matches_email_tool_cost() -> None:
     spend_data = [
         ChannelSpend(channel="Email", spend=30.0, orders=2, revenue=50.0),
     ]
-    rows = build_report(spend_data, [ChannelTarget(channel="Email (Tool Cost)", target_pct=0.1)])
+    rows = build_report(spend_data, [_ct("Email (Tool Cost)", 0.1)])
     assert rows[0].actual_spend == pytest.approx(30.0)
 
 
@@ -213,18 +229,33 @@ def test_build_report_empty_spend_gives_zero_pct() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _rr(**kwargs) -> ReportRow:
+    """Construct a ReportRow with default zero values for optional benchmark fields."""
+    defaults = dict(
+        channel="",
+        actual_spend=0.0,
+        actual_pct=0.0,
+        target_pct=0.0,
+        delta_pct=0.0,
+        actual_revenue=0.0,
+        actual_roas=0.0,
+        target_roas=0.0,
+        actual_orders=0.0,
+        target_nc_orders=0.0,
+        target_nc_rev=0.0,
+        target_nc_roas=0.0,
+        target_cac=0.0,
+        actual_cac=0.0,
+        bewertung="",
+    )
+    defaults.update(kwargs)
+    return ReportRow(**defaults)
+
+
 def test_format_markdown_table_contains_headers() -> None:
-    rows = [
-        ReportRow(
-            channel="Meta Ads",
-            actual_spend=300.0,
-            actual_pct=60.0,
-            target_pct=28.7,
-            delta_pct=31.3,
-        )
-    ]
+    rows = [_rr(channel="Meta Ads", actual_spend=300.0, actual_pct=60.0, target_pct=28.7, delta_pct=31.3)]
     table = format_markdown_table(rows, date(2026, 3, 30))
-    assert "2026-03-30" in table
+    assert "30.03.2026" in table
     assert "Meta Ads" in table
     assert "Ist %" in table
     assert "Soll %" in table
@@ -232,15 +263,7 @@ def test_format_markdown_table_contains_headers() -> None:
 
 
 def test_format_markdown_table_shows_total_row() -> None:
-    rows = [
-        ReportRow(
-            channel="Meta Ads",
-            actual_spend=300.0,
-            actual_pct=60.0,
-            target_pct=28.7,
-            delta_pct=31.3,
-        )
-    ]
+    rows = [_rr(channel="Meta Ads", actual_spend=300.0, actual_pct=60.0, target_pct=28.7, delta_pct=31.3)]
     table = format_markdown_table(rows, date(2026, 3, 30))
     assert "TOTAL" in table
 
@@ -255,8 +278,9 @@ def test_send_to_teams_posts_json() -> None:
     mock_resp.status_code = 202
     mock_resp.raise_for_status = MagicMock()
 
+    rows = [_rr(channel="Meta Ads", actual_spend=300.0, actual_pct=60.0, target_pct=28.7, delta_pct=31.3)]
     with patch("loaders.getklar_daily_report.httpx.post", return_value=mock_resp) as mock_post:
-        send_to_teams("https://webhook.example.com/teams", "# Report\n\nSome data")
+        send_to_teams("https://webhook.example.com/teams", rows, date(2026, 3, 30))
 
     mock_post.assert_called_once()
     call_kwargs = mock_post.call_args
