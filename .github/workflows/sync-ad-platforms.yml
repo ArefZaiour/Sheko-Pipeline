@@ -1,0 +1,54 @@
+name: Sync Ad Platforms
+
+on:
+  schedule:
+    # 5:00 UTC daily — syncs yesterday's data before the 9 AM GetKlar report
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      start_date:
+        description: "Start date (YYYY-MM-DD). Defaults to yesterday."
+        required: false
+      end_date:
+        description: "End date (YYYY-MM-DD). Defaults to yesterday."
+        required: false
+      platform:
+        description: "Platform to sync: google_ads | meta | all"
+        required: false
+        default: "all"
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install packages/pipelines
+
+      - name: Sync ad platform metrics
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GOOGLE_ADS_DEVELOPER_TOKEN: ${{ secrets.GOOGLE_ADS_DEVELOPER_TOKEN }}
+          GOOGLE_ADS_CLIENT_ID: ${{ secrets.GOOGLE_ADS_CLIENT_ID }}
+          GOOGLE_ADS_CLIENT_SECRET: ${{ secrets.GOOGLE_ADS_CLIENT_SECRET }}
+          GOOGLE_ADS_REFRESH_TOKEN: ${{ secrets.GOOGLE_ADS_REFRESH_TOKEN }}
+          GOOGLE_ADS_LOGIN_CUSTOMER_ID: ${{ secrets.GOOGLE_ADS_LOGIN_CUSTOMER_ID }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          SYNC_ACCOUNTS: ${{ secrets.SYNC_ACCOUNTS }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.start_date }}" ]; then
+            ARGS="$ARGS --start ${{ github.event.inputs.start_date }}"
+          fi
+          if [ -n "${{ github.event.inputs.end_date }}" ]; then
+            ARGS="$ARGS --end ${{ github.event.inputs.end_date }}"
+          fi
+          if [ -n "${{ github.event.inputs.platform }}" ]; then
+            ARGS="$ARGS --platform ${{ github.event.inputs.platform }}"
+          fi
+          PYTHONPATH=packages/pipelines/src python -m loaders.sync_ad_platforms $ARGS
