@@ -1,0 +1,62 @@
+name: Native Ads Pipeline
+
+on:
+  schedule:
+    # Poll every hour Mon-Fri during business hours (07:00–19:00 UTC)
+    - cron: "0 7-19 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: "Platform to upload to"
+        required: false
+        default: "all"
+        type: choice
+        options: [all, outbrain, taboola]
+      dry_run:
+        description: "Download only — skip upload (dry run)"
+        required: false
+        default: "false"
+        type: boolean
+      oldest_ts:
+        description: "Only process messages newer than this Unix timestamp"
+        required: false
+        default: ""
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: packages/pipelines/pyproject.toml
+
+      - name: Install dependencies
+        run: PYTHONPATH=packages/pipelines/src pip install packages/pipelines
+
+      - name: Run Native Ads Pipeline
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL_ID: ${{ secrets.SLACK_CHANNEL_ID }}
+          NATIVE_ADS_LANDING_URL: ${{ secrets.NATIVE_ADS_LANDING_URL }}
+          OUTBRAIN_API_KEY: ${{ secrets.OUTBRAIN_API_KEY }}
+          OUTBRAIN_ACCOUNT_ID: ${{ secrets.OUTBRAIN_ACCOUNT_ID }}
+          OUTBRAIN_TEMPLATE_CAMPAIGN_ID: ${{ secrets.OUTBRAIN_TEMPLATE_CAMPAIGN_ID }}
+          TABOOLA_CLIENT_ID: ${{ secrets.TABOOLA_CLIENT_ID }}
+          TABOOLA_CLIENT_SECRET: ${{ secrets.TABOOLA_CLIENT_SECRET }}
+          TABOOLA_ACCOUNT_ID: ${{ secrets.TABOOLA_ACCOUNT_ID }}
+          TABOOLA_TEMPLATE_CAMPAIGN_ID: ${{ secrets.TABOOLA_TEMPLATE_CAMPAIGN_ID }}
+        run: |
+          ARGS="--platform ${{ inputs.platform || 'all' }}"
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ inputs.oldest_ts }}" ]; then
+            ARGS="$ARGS --oldest-ts ${{ inputs.oldest_ts }}"
+          fi
+          PYTHONPATH=packages/pipelines/src python -m loaders.native_ads_pipeline $ARGS
