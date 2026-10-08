@@ -162,6 +162,75 @@ class MetaAdsClient(AdPlatformClient):
         )
         return results
 
+    def fetch_campaign_spend_by_day(
+        self,
+        campaign_id: str,
+        start_date: date,
+        end_date: date,
+    ) -> list[dict[str, Any]]:
+        """Return daily spend + ROAS for a single campaign.
+
+        Each dict: date_start, date_stop, spend_usd, revenue_usd, roas.
+        """
+        url = f"{_GRAPH_BASE}/{campaign_id}/insights"
+        params: dict[str, Any] = {
+            "fields": "spend,actions,action_values,date_start,date_stop",
+            "time_range": (
+                f'{{"since":"{start_date.isoformat()}",'
+                f'"until":"{end_date.isoformat()}"}}'
+            ),
+            "time_increment": 1,
+            "limit": 100,
+        }
+        rows = self._paginate(url, params)
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            spend = float(row.get("spend", 0) or 0)
+            revenue = _extract_purchase_metric(row.get("action_values") or [], "value")
+            results.append(
+                {
+                    "date_start": row.get("date_start", ""),
+                    "date_stop": row.get("date_stop", ""),
+                    "spend_usd": spend,
+                    "revenue_usd": revenue,
+                    "roas": round(revenue / spend, 4) if spend > 0 else 0.0,
+                }
+            )
+        return results
+
+    def fetch_ad_sets(
+        self,
+        campaign_id: str,
+        status_filter: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return ad sets for a campaign with their effective status.
+
+        Each dict: ad_set_id, ad_set_name, status, effective_status, daily_budget_usd.
+
+        Args:
+            campaign_id: The campaign node ID (numeric string, no act_ prefix).
+            status_filter: If provided, only return ad sets with these effective statuses
+                e.g. ["ACTIVE", "PAUSED"]. Defaults to all statuses.
+        """
+        url = f"{_GRAPH_BASE}/{campaign_id}/adsets"
+        params: dict[str, Any] = {
+            "fields": "id,name,status,effective_status,daily_budget",
+            "limit": 200,
+        }
+        if status_filter:
+            params["effective_status"] = str(status_filter).replace("'", '"')
+        rows = self._paginate(url, params)
+        return [
+            {
+                "ad_set_id": r.get("id", ""),
+                "ad_set_name": r.get("name", ""),
+                "status": r.get("status", ""),
+                "effective_status": r.get("effective_status", ""),
+                "daily_budget_usd": float(r.get("daily_budget", 0) or 0) / 100,
+            }
+            for r in rows
+        ]
+
     async def fetch_budget_pacing(self, account_id: str) -> list[dict[str, Any]]:
         """Return current daily budget and today's spend for active campaigns.
 
