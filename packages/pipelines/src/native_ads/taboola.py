@@ -104,7 +104,7 @@ class TaboolaClient:
         self._access_token = data["access_token"]
         self._token_expiry = time.time() + int(data.get("expires_in", 3600))
         log.debug("taboola.auth.token_refreshed")
-        return self._access_token  # type: ignore[return-value]
+        return self._access_token
 
     def _auth_headers(self) -> dict[str, str]:
         return {

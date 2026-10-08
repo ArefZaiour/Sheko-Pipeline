@@ -87,7 +87,7 @@ class GetKlarClient:
         # expiresIn is in milliseconds (e.g. 300000 = 5 min).
         self._access_token_expiry = time.time() + data["expiresIn"] / 1000
         log.debug("getklar.auth.token_refreshed")
-        return self._access_token  # type: ignore[return-value]
+        return self._access_token
 
     # ------------------------------------------------------------------
     # Public API

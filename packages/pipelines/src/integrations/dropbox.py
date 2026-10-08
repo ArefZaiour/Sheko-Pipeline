@@ -32,7 +32,7 @@ def parse_dropbox_url(slack_mrkdwn: str) -> str | None:
         Unescaped Dropbox URL, or ``None`` if none found.
     """
     for raw in _SLACK_URL_RE.findall(slack_mrkdwn):
-        unescaped = html.unescape(raw)
+        unescaped: str = html.unescape(str(raw))
         if "dropbox.com" in unescaped:
             return unescaped
     return None

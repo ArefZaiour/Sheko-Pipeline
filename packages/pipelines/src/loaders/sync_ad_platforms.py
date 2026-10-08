@@ -110,7 +110,7 @@ def _resolve_account_uuid(conn: Any, platform: str, external_id: str) -> str:
             """,  # noqa: S608
             client_id_param,
         )
-        return str(cur.fetchone()[0])  # type: ignore[index]
+        return str(cur.fetchone()[0])
 
 
 async def _sync_google_ads(

@@ -133,7 +133,8 @@ class SlackNativeAdMonitor:
             log.error("slack.conversations_history.error", error=str(exc))
             raise
 
-        messages: list[dict[str, Any]] = resp.data.get("messages") or []
+        data: dict[str, Any] = resp.data if isinstance(resp.data, dict) else {}
+        messages: list[dict[str, Any]] = data.get("messages") or []
         messages.reverse()  # Slack returns newest-first; process oldest first
 
         if self._cursor_ts:

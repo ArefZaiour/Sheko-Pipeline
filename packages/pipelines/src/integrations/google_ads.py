@@ -103,7 +103,7 @@ class GoogleAdsClient(AdPlatformClient):
             return self._client
 
         # Import lazily so tests can run without the SDK installed.
-        from google.ads.googleads.client import GoogleAdsClient as _GAClient  # type: ignore[import]
+        from google.ads.googleads.client import GoogleAdsClient as _GAClient
 
         config: dict[str, Any] = {
             "developer_token": self._developer_token,
