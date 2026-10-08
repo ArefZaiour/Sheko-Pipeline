@@ -159,7 +159,7 @@ class SlackNativeAdMonitor:
             ts_float = float(msg_ts)
         except (ValueError, TypeError):
             ts_float = time.time()
-        date_str = datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
+        date_str = datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")  # noqa: UP017
 
         result: list[Path] = []
         for att in msg.get("attachments") or []:
