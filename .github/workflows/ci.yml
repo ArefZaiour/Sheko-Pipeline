@@ -39,6 +39,8 @@ jobs:
           cache: npm
       - run: npm ci --workspaces --include-workspace-root
         working-directory: .
+      - run: npm run build -w @perf-marketing/shared
+        working-directory: .
       - run: npm run lint
       - run: npm run test -- --passWithNoTests
       - run: npm run build
