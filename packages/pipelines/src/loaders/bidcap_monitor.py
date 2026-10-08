@@ -29,7 +29,7 @@ from __future__ import annotations
 import os
 import sys
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 
 import structlog
 
@@ -78,7 +78,7 @@ def _make_recommendation(days: list[DayResult]) -> tuple[str, str]:
     test_day = (today - _TEST_START).days + 1  # 1-indexed
 
     if not days:
-        return "NO_DATA", f"No data yet — test started {_TEST_START}. Re-run after Meta Ads reconnects."
+        return "NO_DATA", f"No data yet — test started {_TEST_START}. Re-run after Meta Ads reconnects."  # noqa: E501
 
     # Check if spend is too low on recent days → bid caps too tight
     recent = days[-1]
