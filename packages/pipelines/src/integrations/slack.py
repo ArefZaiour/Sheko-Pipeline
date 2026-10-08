@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -159,7 +159,7 @@ class SlackNativeAdMonitor:
             ts_float = float(msg_ts)
         except (ValueError, TypeError):
             ts_float = time.time()
-        date_str = datetime.fromtimestamp(ts_float, tz=UTC).strftime("%Y-%m-%d")
+        date_str = datetime.fromtimestamp(ts_float, tz=timezone.utc).strftime("%Y-%m-%d")
 
         result: list[Path] = []
         for att in msg.get("attachments") or []:
