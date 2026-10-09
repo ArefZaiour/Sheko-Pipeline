@@ -395,3 +395,196 @@ async def test_meta_fetch_budget_pacing(meta_client: MetaAdsClient) -> None:
     assert r["daily_budget_usd"] == pytest.approx(50.0)  # 5000 cents / 100
     assert r["spend_today_usd"] == pytest.approx(12.50)
     assert r["impressions_today"] == 3000
+
+
+# ---------------------------------------------------------------------------
+# MetaAdsClient — fetch_campaign_spend_by_day
+# ---------------------------------------------------------------------------
+
+
+def test_meta_fetch_campaign_spend_by_day_returns_rows(meta_client: MetaAdsClient) -> None:
+    fake_response = {
+        "data": [
+            {
+                "date_start": "2026-10-07",
+                "date_stop": "2026-10-07",
+                "spend": "120.00",
+                "action_values": [{"action_type": "purchase", "value": "300.00"}],
+            },
+            {
+                "date_start": "2026-10-08",
+                "date_stop": "2026-10-08",
+                "spend": "80.00",
+                "action_values": [{"action_type": "purchase", "value": "200.00"}],
+            },
+        ],
+        "paging": {},
+    }
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = fake_response
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("integrations.meta.httpx.get", return_value=mock_resp):
+        results = meta_client.fetch_campaign_spend_by_day(
+            "52529430959117", date(2026, 10, 7), date(2026, 10, 8)
+        )
+
+    assert len(results) == 2
+    r0 = results[0]
+    assert r0["date_start"] == "2026-10-07"
+    assert r0["spend_usd"] == pytest.approx(120.0)
+    assert r0["revenue_usd"] == pytest.approx(300.0)
+    assert r0["roas"] == pytest.approx(2.5)
+
+    r1 = results[1]
+    assert r1["spend_usd"] == pytest.approx(80.0)
+    assert r1["roas"] == pytest.approx(2.5)
+
+
+def test_meta_fetch_campaign_spend_by_day_zero_spend_gives_zero_roas(
+    meta_client: MetaAdsClient,
+) -> None:
+    fake_response = {
+        "data": [
+            {
+                "date_start": "2026-10-07",
+                "date_stop": "2026-10-07",
+                "spend": "0",
+                "action_values": [{"action_type": "purchase", "value": "100.00"}],
+            }
+        ],
+        "paging": {},
+    }
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = fake_response
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("integrations.meta.httpx.get", return_value=mock_resp):
+        results = meta_client.fetch_campaign_spend_by_day(
+            "camp-id", date(2026, 10, 7), date(2026, 10, 7)
+        )
+
+    assert results[0]["roas"] == 0.0
+
+
+def test_meta_fetch_campaign_spend_by_day_empty(meta_client: MetaAdsClient) -> None:
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = {"data": [], "paging": {}}
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("integrations.meta.httpx.get", return_value=mock_resp):
+        results = meta_client.fetch_campaign_spend_by_day(
+            "camp-id", date(2026, 10, 7), date(2026, 10, 7)
+        )
+
+    assert results == []
+
+
+# ---------------------------------------------------------------------------
+# MetaAdsClient — fetch_ad_sets
+# ---------------------------------------------------------------------------
+
+
+def test_meta_fetch_ad_sets_returns_rows(meta_client: MetaAdsClient) -> None:
+    fake_response = {
+        "data": [
+            {
+                "id": "as-1",
+                "name": "ABO_Testing_US",
+                "status": "PAUSED",
+                "effective_status": "CAMPAIGN_PAUSED",
+                "daily_budget": "2000",  # cents → $20
+            },
+            {
+                "id": "as-2",
+                "name": "BIDCAP_Scaling",
+                "status": "ACTIVE",
+                "effective_status": "ACTIVE",
+                "daily_budget": "5000",  # cents → $50
+            },
+        ],
+        "paging": {},
+    }
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = fake_response
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("integrations.meta.httpx.get", return_value=mock_resp):
+        results = meta_client.fetch_ad_sets("52529430959117")
+
+    assert len(results) == 2
+    r0 = results[0]
+    assert r0["ad_set_id"] == "as-1"
+    assert r0["ad_set_name"] == "ABO_Testing_US"
+    assert r0["status"] == "PAUSED"
+    assert r0["effective_status"] == "CAMPAIGN_PAUSED"
+    assert r0["daily_budget_usd"] == pytest.approx(20.0)
+
+    r1 = results[1]
+    assert r1["daily_budget_usd"] == pytest.approx(50.0)
+
+
+def test_meta_fetch_ad_sets_status_filter_sent_in_params(meta_client: MetaAdsClient) -> None:
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = {"data": [], "paging": {}}
+    mock_resp.raise_for_status = MagicMock()
+
+    captured_params: dict[str, Any] = {}
+
+    def fake_get(url: str, **kwargs: Any) -> MagicMock:
+        captured_params.update(kwargs.get("params", {}))
+        return mock_resp
+
+    with patch("integrations.meta.httpx.get", side_effect=fake_get):
+        meta_client.fetch_ad_sets("camp-id", status_filter=["ACTIVE", "PAUSED"])
+
+    assert "effective_status" in captured_params
+    assert "ACTIVE" in captured_params["effective_status"]
+    assert "PAUSED" in captured_params["effective_status"]
+
+
+def test_meta_fetch_ad_sets_no_filter_omits_param(meta_client: MetaAdsClient) -> None:
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = {"data": [], "paging": {}}
+    mock_resp.raise_for_status = MagicMock()
+
+    captured_params: dict[str, Any] = {}
+
+    def fake_get(url: str, **kwargs: Any) -> MagicMock:
+        captured_params.update(kwargs.get("params", {}))
+        return mock_resp
+
+    with patch("integrations.meta.httpx.get", side_effect=fake_get):
+        meta_client.fetch_ad_sets("camp-id")
+
+    assert "effective_status" not in captured_params
+
+
+def test_meta_fetch_ad_sets_missing_daily_budget(meta_client: MetaAdsClient) -> None:
+    fake_response = {
+        "data": [
+            {
+                "id": "as-3",
+                "name": "CBO_Set",
+                "status": "ACTIVE",
+                "effective_status": "ACTIVE",
+                # no daily_budget key — CBO campaigns manage budget at campaign level
+            }
+        ],
+        "paging": {},
+    }
+    mock_resp = MagicMock()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = fake_response
+    mock_resp.raise_for_status = MagicMock()
+
+    with patch("integrations.meta.httpx.get", return_value=mock_resp):
+        results = meta_client.fetch_ad_sets("camp-id")
+
+    assert results[0]["daily_budget_usd"] == pytest.approx(0.0)
