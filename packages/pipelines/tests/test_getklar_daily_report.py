@@ -419,3 +419,53 @@ def test_yesterday_is_one_day_before_today() -> None:
     from datetime import timedelta
 
     assert yesterday() == _date.today() - timedelta(days=1)
+
+
+# ---------------------------------------------------------------------------
+# main() — exit codes
+# ---------------------------------------------------------------------------
+
+
+def test_getklar_main_returns_0_on_success() -> None:
+    from loaders.getklar_daily_report import main
+
+    with (
+        patch("loaders.getklar_daily_report.load_dotenv"),
+        patch("loaders.getklar_daily_report.run_pipeline", return_value="=== Report ==="),
+    ):
+        exit_code = main([])
+
+    assert exit_code == 0
+
+
+def test_getklar_main_returns_1_on_os_error() -> None:
+    from loaders.getklar_daily_report import main
+
+    with (
+        patch("loaders.getklar_daily_report.load_dotenv"),
+        patch(
+            "loaders.getklar_daily_report.run_pipeline",
+            side_effect=OSError("GETKLAR_API_TOKEN not set"),
+        ),
+    ):
+        exit_code = main([])
+
+    assert exit_code == 1
+
+
+def test_getklar_main_returns_1_on_http_error() -> None:
+    import httpx
+
+    from loaders.getklar_daily_report import main
+
+    fake_response = MagicMock()
+    fake_response.status_code = 401
+    http_exc = httpx.HTTPStatusError("401 Unauthorized", request=MagicMock(), response=fake_response)  # noqa: E501
+
+    with (
+        patch("loaders.getklar_daily_report.load_dotenv"),
+        patch("loaders.getklar_daily_report.run_pipeline", side_effect=http_exc),
+    ):
+        exit_code = main([])
+
+    assert exit_code == 1
