@@ -1,9 +1,11 @@
 """Meta Ads (Facebook) API client.
 
 Fetches campaign-level spend and performance metrics via the Marketing API Insights endpoint.
+Supports writing campaign budgets and bid caps via the Marketing API.
 
 Authentication uses a long-lived User access token or a System User token:
-  - META_ACCESS_TOKEN  — access token with `ads_read` permission
+  - META_ACCESS_TOKEN  — access token with `ads_read` permission (read-only methods)
+                       — requires `ads_management` for write methods (set_campaign_*)
 
 Required env vars:
     META_ACCESS_TOKEN
@@ -230,6 +232,60 @@ class MetaAdsClient(AdPlatformClient):
             }
             for r in rows
         ]
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=2, max=30))
+    def _post(self, url: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Issue a POST to the Graph API (requires ads_management permission)."""
+        response = httpx.post(
+            url,
+            data={**data, "access_token": self._access_token},
+            timeout=self._timeout,
+        )
+        response.raise_for_status()
+        return response.json()  # type: ignore[no-any-return]
+
+    def set_campaign_daily_budget(
+        self, campaign_id: str, daily_budget_usd: float
+    ) -> dict[str, Any]:
+        """Update the daily budget of a CBO campaign.
+
+        Args:
+            campaign_id: Campaign node ID (numeric string).
+            daily_budget_usd: New daily budget in USD (converted to cents internally).
+
+        Returns:
+            Graph API response (typically ``{"success": true}``).
+        """
+        cents = str(round(daily_budget_usd * 100))
+        url = f"{_GRAPH_BASE}/{campaign_id}"
+        result = self._post(url, {"daily_budget": cents})
+        log.info(
+            "meta_ads.campaign.budget_updated",
+            campaign_id=campaign_id,
+            daily_budget_usd=daily_budget_usd,
+        )
+        return result
+
+    def set_campaign_bid_cap(self, campaign_id: str, bid_cap_usd: float) -> dict[str, Any]:
+        """Update the bid cap on a CBO campaign (loosens delivery when underdelivering).
+
+        Args:
+            campaign_id: Campaign node ID (numeric string).
+            bid_cap_usd: New bid cap in USD (converted to cents internally).
+                         Set to 0 to remove the bid cap (lowest-cost strategy).
+
+        Returns:
+            Graph API response (typically ``{"success": true}``).
+        """
+        cents = str(round(bid_cap_usd * 100))
+        url = f"{_GRAPH_BASE}/{campaign_id}"
+        result = self._post(url, {"bid_cap": cents})
+        log.info(
+            "meta_ads.campaign.bid_cap_updated",
+            campaign_id=campaign_id,
+            bid_cap_usd=bid_cap_usd,
+        )
+        return result
 
     async def fetch_budget_pacing(self, account_id: str) -> list[dict[str, Any]]:
         """Return current daily budget and today's spend for active campaigns.

@@ -1,14 +1,19 @@
-"""Unit tests for bidcap_monitor._make_recommendation.
+"""Unit tests for bidcap_monitor._make_recommendation and apply_recommendation.
 
-Tests the pure recommendation logic without any HTTP calls.
+Tests the pure recommendation logic and the apply path without any HTTP calls.
 """
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import loaders.bidcap_monitor as monitor_mod
-from loaders.bidcap_monitor import DayResult, _make_recommendation
+from loaders.bidcap_monitor import (
+    BidCapReport,
+    DayResult,
+    _make_recommendation,
+    apply_recommendation,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -148,3 +153,47 @@ def test_low_spend_takes_priority_over_day4_check() -> None:
         rec, _ = _make_recommendation(days)
 
     assert rec == "LOOSEN_BID_CAPS"
+
+
+# ---------------------------------------------------------------------------
+# apply_recommendation
+# ---------------------------------------------------------------------------
+
+
+def _report(recommendation: str) -> BidCapReport:
+    return BidCapReport(run_date="2026-10-09", recommendation=recommendation)
+
+
+def test_apply_loosen_bid_caps_calls_set_bid_cap() -> None:
+    mock_client = MagicMock()
+    with (
+        patch("loaders.bidcap_monitor.build_from_env", return_value=mock_client),
+        patch.object(monitor_mod, "_BID_CAP_LOOSE", 87.5),
+        patch.object(monitor_mod, "_BIDCAP_CAMPAIGN_ID", "camp-test"),
+    ):
+        apply_recommendation(_report("LOOSEN_BID_CAPS"))
+
+    mock_client.set_campaign_bid_cap.assert_called_once_with("camp-test", 87.5)
+    mock_client.set_campaign_daily_budget.assert_not_called()
+
+
+def test_apply_scale_budget_calls_set_daily_budget() -> None:
+    mock_client = MagicMock()
+    with (
+        patch("loaders.bidcap_monitor.build_from_env", return_value=mock_client),
+        patch.object(monitor_mod, "_SCALE_BUDGET_EUR", 3000.0),
+        patch.object(monitor_mod, "_BIDCAP_CAMPAIGN_ID", "camp-test"),
+    ):
+        apply_recommendation(_report("SCALE_BUDGET"))
+
+    mock_client.set_campaign_daily_budget.assert_called_once_with("camp-test", 3000.0)
+    mock_client.set_campaign_bid_cap.assert_not_called()
+
+
+def test_apply_continue_test_does_nothing() -> None:
+    mock_client = MagicMock()
+    with patch("loaders.bidcap_monitor.build_from_env", return_value=mock_client):
+        apply_recommendation(_report("CONTINUE_TEST"))
+
+    mock_client.set_campaign_bid_cap.assert_not_called()
+    mock_client.set_campaign_daily_budget.assert_not_called()

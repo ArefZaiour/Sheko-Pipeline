@@ -7,7 +7,15 @@ Context (GRO-64 / GRO-100):
   Goal:     If Day-4 ROAS >1.5 → scale to €3k/day on Oct 11
 
 Usage:
-    python -m loaders.bidcap_monitor
+    python -m loaders.bidcap_monitor           # analyse only
+    python -m loaders.bidcap_monitor --apply   # analyse + execute recommendation
+
+  --apply executes the recommended action automatically:
+    LOOSEN_BID_CAPS  → raises campaign bid cap to BID_CAP_LOOSE_EUR
+    SCALE_BUDGET     → sets campaign daily budget to BIDCAP_SCALE_BUDGET_EUR
+
+  Without --apply the script is fully read-only (ads_read permission sufficient).
+  With --apply it requires ads_management permission on the campaign.
 
 Required env vars:
     META_ACCESS_TOKEN
@@ -194,11 +202,51 @@ def print_report(report: BidCapReport) -> None:
     print(f"{'='*60}\n")
 
 
+def apply_recommendation(report: BidCapReport) -> None:
+    """Execute the recommendation in `report` against the live campaign.
+
+    Requires ads_management permission on the Meta access token.
+    Raises OSError / httpx.HTTPStatusError on failure.
+    """
+    client: MetaAdsClient = build_from_env()
+
+    if report.recommendation == "LOOSEN_BID_CAPS":
+        print(
+            f"Applying: raising bid cap €{_BID_CAP_CURRENT:.0f} → €{_BID_CAP_LOOSE:.0f} …",
+            flush=True,
+        )
+        client.set_campaign_bid_cap(_BIDCAP_CAMPAIGN_ID, _BID_CAP_LOOSE)
+        print(f"  Done — bid cap set to €{_BID_CAP_LOOSE:.0f}.")
+
+    elif report.recommendation == "SCALE_BUDGET":
+        print(
+            f"Applying: scaling daily budget to €{_SCALE_BUDGET_EUR:.0f} …",
+            flush=True,
+        )
+        client.set_campaign_daily_budget(_BIDCAP_CAMPAIGN_ID, _SCALE_BUDGET_EUR)
+        print(f"  Done — daily budget set to €{_SCALE_BUDGET_EUR:.0f}.")
+
+    else:
+        print(f"No automated action for recommendation '{report.recommendation}'.")
+
+
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="BIDCAP test monitor")
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Execute the recommended action (requires ads_management permission).",
+    )
+    args = parser.parse_args()
+
     try:
         report = run_monitor()
         print_report(report)
-        # Exit non-zero if action is needed
+        if args.apply and report.recommendation in ("LOOSEN_BID_CAPS", "SCALE_BUDGET"):
+            apply_recommendation(report)
+        # Exit non-zero if action is needed (whether or not --apply was passed)
         if report.recommendation in ("LOOSEN_BID_CAPS", "SCALE_BUDGET"):
             sys.exit(2)
         if report.abo_verified and report.abo_active_count > 0:

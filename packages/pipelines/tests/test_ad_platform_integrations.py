@@ -588,3 +588,78 @@ def test_meta_fetch_ad_sets_missing_daily_budget(meta_client: MetaAdsClient) -> 
         results = meta_client.fetch_ad_sets("camp-id")
 
     assert results[0]["daily_budget_usd"] == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# MetaAdsClient — write methods
+# ---------------------------------------------------------------------------
+
+
+def test_meta_set_campaign_daily_budget(meta_client: MetaAdsClient) -> None:
+    captured: dict = {}
+
+    def fake_post(url: str, **kwargs: object) -> MagicMock:
+        captured["url"] = url
+        captured["data"] = kwargs.get("data", {})
+        m = MagicMock()
+        m.json.return_value = {"success": True}
+        m.raise_for_status = MagicMock()
+        return m
+
+    with patch("integrations.meta.httpx.post", side_effect=fake_post):
+        result = meta_client.set_campaign_daily_budget("camp-123", 3000.0)
+
+    assert "camp-123" in captured["url"]
+    assert captured["data"]["daily_budget"] == "300000"  # USD → cents
+    assert result == {"success": True}
+
+
+def test_meta_set_campaign_daily_budget_rounds_cents(meta_client: MetaAdsClient) -> None:
+    captured: dict = {}
+
+    def fake_post(url: str, **kwargs: object) -> MagicMock:
+        captured["data"] = kwargs.get("data", {})
+        m = MagicMock()
+        m.json.return_value = {"success": True}
+        m.raise_for_status = MagicMock()
+        return m
+
+    with patch("integrations.meta.httpx.post", side_effect=fake_post):
+        meta_client.set_campaign_daily_budget("camp-x", 50.01)
+
+    assert captured["data"]["daily_budget"] == "5001"
+
+
+def test_meta_set_campaign_bid_cap(meta_client: MetaAdsClient) -> None:
+    captured: dict = {}
+
+    def fake_post(url: str, **kwargs: object) -> MagicMock:
+        captured["url"] = url
+        captured["data"] = kwargs.get("data", {})
+        m = MagicMock()
+        m.json.return_value = {"success": True}
+        m.raise_for_status = MagicMock()
+        return m
+
+    with patch("integrations.meta.httpx.post", side_effect=fake_post):
+        result = meta_client.set_campaign_bid_cap("camp-456", 87.5)
+
+    assert "camp-456" in captured["url"]
+    assert captured["data"]["bid_cap"] == "8750"  # USD → cents
+    assert result == {"success": True}
+
+
+def test_meta_set_campaign_bid_cap_zero_removes_cap(meta_client: MetaAdsClient) -> None:
+    captured: dict = {}
+
+    def fake_post(url: str, **kwargs: object) -> MagicMock:
+        captured["data"] = kwargs.get("data", {})
+        m = MagicMock()
+        m.json.return_value = {"success": True}
+        m.raise_for_status = MagicMock()
+        return m
+
+    with patch("integrations.meta.httpx.post", side_effect=fake_post):
+        meta_client.set_campaign_bid_cap("camp-x", 0.0)
+
+    assert captured["data"]["bid_cap"] == "0"
