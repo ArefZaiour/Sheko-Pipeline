@@ -281,3 +281,83 @@ def test_print_summary_with_results(capsys: pytest.CaptureFixture) -> None:
     captured = capsys.readouterr()
     assert "NATIVE_MS_SMOKE" in captured.out
     assert "10" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# main() — exit codes and error handling
+# ---------------------------------------------------------------------------
+
+
+def test_main_returns_1_on_os_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from loaders.native_ads_pipeline import main
+
+    monkeypatch.delenv("NATIVE_ADS_LANDING_URL", raising=False)
+
+    with patch("loaders.native_ads_pipeline.load_dotenv"):
+        exit_code = main([])  # no --dry-run so landing URL is required
+
+    assert exit_code == 1
+
+
+def test_main_returns_1_on_unexpected_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from loaders.native_ads_pipeline import main
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+
+    with (
+        patch("loaders.native_ads_pipeline.load_dotenv"),
+        patch("loaders.native_ads_pipeline.run_pipeline", side_effect=RuntimeError("boom")),
+    ):
+        exit_code = main(["--dry-run"])
+
+    assert exit_code == 1
+
+
+def test_main_returns_0_when_all_packages_succeed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from loaders.native_ads_pipeline import main
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setenv("NATIVE_ADS_LANDING_URL", "https://example.com")
+
+    ok_pkg = PackageResult(
+        package_name="NATIVE_MS_A",
+        folder=tmp_path / "a",
+        images_downloaded=3,
+        upload_results=[_mock_upload_result("outbrain", success=True)],
+    )
+
+    with (
+        patch("loaders.native_ads_pipeline.load_dotenv"),
+        patch("loaders.native_ads_pipeline.run_pipeline", return_value=[ok_pkg]),
+    ):
+        exit_code = main([])
+
+    assert exit_code == 0
+
+
+def test_main_returns_1_when_a_package_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from loaders.native_ads_pipeline import main
+
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-fake")
+    monkeypatch.setenv("NATIVE_ADS_LANDING_URL", "https://example.com")
+
+    failed_pkg = PackageResult(
+        package_name="NATIVE_MS_B",
+        folder=tmp_path / "b",
+        images_downloaded=2,
+        upload_results=[_mock_upload_result("taboola", success=False)],
+    )
+
+    with (
+        patch("loaders.native_ads_pipeline.load_dotenv"),
+        patch("loaders.native_ads_pipeline.run_pipeline", return_value=[failed_pkg]),
+    ):
+        exit_code = main([])
+
+    assert exit_code == 1
